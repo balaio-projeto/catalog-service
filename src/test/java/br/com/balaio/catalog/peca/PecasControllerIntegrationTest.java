@@ -50,9 +50,16 @@ class PecasControllerIntegrationTest {
         ResponseEntity<Map> resposta = http.getForEntity(
                 "/api/v1/pecas?q=LEAO&desconto=true&tamanho=1&pagina=99", Map.class);
 
-        assertThat(resposta.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(resposta.getStatusCode().value()).isEqualTo(200);
+
         Map corpo = resposta.getBody();
-        assertThat(corpo).containsEntry("erro", null);
+
+        assertThat(corpo)
+                .containsKeys("dados", "erro", "paginacao");
+
+        assertThat(corpo.get("dados")).isNotNull();
+        assertThat(corpo.get("erro")).isNull();
+        assertThat(corpo.get("paginacao")).isNotNull();
         List<Map> dados = (List<Map>) corpo.get("dados");
         assertThat(dados).hasSize(1);
         assertThat(dados.getFirst()).containsEntry("slug", "leao-imperial");
@@ -69,6 +76,46 @@ class PecasControllerIntegrationTest {
 
         List<Map> dados = (List<Map>) resposta.getBody().get("dados");
         assertThat(dados.getFirst()).containsEntry("slug", "promocional");
+    }
+
+    @Test
+    void parametroPaginaInvalidoRetornaErroPadronizado() {
+        ResponseEntity<Map> resposta = http.getForEntity(
+                "/api/v1/pecas?pagina=abc",
+                Map.class
+        );
+
+        assertThat(resposta.getStatusCode().value()).isEqualTo(400);
+
+        Map corpo = resposta.getBody();
+        assertThat(corpo).containsKeys("dados", "erro");
+        assertThat(corpo).containsEntry("dados", null);
+        assertThat(corpo).doesNotContainKey("paginacao");
+
+        Map erro = (Map) corpo.get("erro");
+        assertThat(erro)
+                .containsEntry("codigo", "REQUISICAO_INVALIDA")
+                .containsEntry("mensagem", "Dados inválidos.");
+    }
+
+    @Test
+    void rotaInexistenteRetornaErroPadronizado() {
+        ResponseEntity<Map> resposta = http.getForEntity(
+                "/api/v1/rota-inexistente",
+                Map.class
+        );
+
+        assertThat(resposta.getStatusCode().value()).isEqualTo(404);
+
+        Map corpo = resposta.getBody();
+        assertThat(corpo).containsKeys("dados", "erro");
+        assertThat(corpo).containsEntry("dados", null);
+        assertThat(corpo).doesNotContainKey("paginacao");
+
+        Map erro = (Map) corpo.get("erro");
+        assertThat(erro)
+                .containsEntry("codigo", "RECURSO_NAO_ENCONTRADO")
+                .containsEntry("mensagem", "Recurso não encontrado.");
     }
 
     private void persistir(Peca peca) {
