@@ -3,6 +3,7 @@ package br.com.balaio.catalog.peca.api;
 import java.math.BigDecimal;
 import java.util.List;
 import br.com.balaio.catalog.peca.domain.Peca;
+import br.com.balaio.catalog.peca.domain.FotoPeca;
 
 public record PecaResponse(
         String slug,
@@ -20,7 +21,10 @@ public record PecaResponse(
         String imagem,
         BigDecimal avaliacao,
         Integer totalAvaliacoes,
-        String situacao) {
+        String situacao,
+        List<FotoPeca> fotos,
+        List<String> ordemFotos,
+        String criadaEm) {
 
     public static PecaResponse from(Peca peca) {
         return new PecaResponse(
@@ -39,6 +43,9 @@ public record PecaResponse(
                 peca.imagem(),
                 peca.avaliacao(),
                 peca.totalAvaliacoes(),
-                peca.situacao());
+                peca.situacao(),
+                peca.fotos(),
+                peca.fotos().stream().map(FotoPeca::id).toList(),
+                peca.criadaEm() == null ? null : peca.criadaEm().toString());
     }
 }

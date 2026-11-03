@@ -21,3 +21,10 @@ management:
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+balaio:
+  catalog:
+    jwt:
+      public-key-location: ${JWT_PUBLIC_KEY_LOCATION:}
+      issuer: ${JWT_ISSUER:}
+      audience: ${JWT_AUDIENCE:}
+    profile-url: ${PROFILE_SERVICE_URL:http://localhost:8082}
