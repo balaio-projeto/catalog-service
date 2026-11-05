@@ -55,8 +55,11 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
     @Transactional
     @Override
     public Peca atualizar(String slug, DadosPeca alteracoes, UUID contaId) {
+        pecas.bloquearPeca(slug);
         var atual = pecas.obter(slug).orElseThrow(() -> naoEncontrado());
         if (!contaId.equals(atual.proprietarioId())) throw naoEncontrado();
+        if (atual.inativadoEm() != null)
+            throw new ErroPecaException(409, "PECA_INDISPONIVEL", null, "Peça indisponível para edição.");
         var dados = validar(new DadosPeca(
                 escolher(alteracoes.nome(), atual.nome()),
                 escolher(alteracoes.tecnica(), atual.tecnica()),

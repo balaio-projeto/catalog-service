@@ -6,7 +6,7 @@ spring:
   datasource:
     url: ${CATALOG_DB_URL:jdbc:postgresql://localhost:5432/balaio_catalog}
     username: ${CATALOG_DB_USERNAME:balaio_catalog_app}
-    password: ${CATALOG_DB_PASSWORD:balaio}
+    password: ${CATALOG_DB_PASSWORD}
   jpa:
     open-in-view: false
     hibernate:
@@ -22,6 +22,8 @@ springdoc:
   swagger-ui:
     path: /swagger-ui.html
 balaio:
+  internal:
+    token: ${BALAIO_INTERNAL_TOKEN:}
   catalog:
     jwt:
       public-key-location: ${JWT_PUBLIC_KEY_LOCATION:}

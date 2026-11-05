@@ -1,5 +1,15 @@
 # catalog-service
 
+## Reserva interna de peça única (PI-190)
+
+O catálogo é a autoridade da disponibilidade. `POST /internal/v1/reservas` recebe `{pedidoId,slug,chave}` e devolve `{dados:{id,pedidoId,slug,estado,expiraEm,preco,artesao,proprietarioId},erro:null}`. Preço e proprietário são registrados na reserva e permanecem estáveis nos replays. A chave de criação é estável por pedido e peça. A mesma chamada devolve a reserva ativa existente; pedido ou chave diferente recebe conflito. A reserva dura 15 minutos e retira a peça única da listagem. Peças de encomenda não usam esta operação.
+
+`POST /internal/v1/reservas/{id}/liberar` recebe `{pedidoId,chave:"liberar:<id>"}`. A repetição devolve o resultado persistido. Uma liberação tardia de reserva expirada ou já liberada não toca numa reserva posterior da mesma peça. `GET /internal/v1/reservas/{id}` exige o cabeçalho `X-Balaio-Pedido-Id` e permite reconciliação pelo commerce. O processo de expiração libera reservas vencidas em intervalos de um minuto; a criação também trata uma reserva vencida antes de tentar reservar novamente.
+
+As três rotas exigem `X-Balaio-Service-Token` com o valor de `BALAIO_INTERNAL_TOKEN`, configurado fora do Git com pelo menos 32 caracteres. Sem esse segredo configurado, as rotas internas recusam chamadas. Elas não são encaminhadas pelo Gateway. O banco do commerce nunca deve atualizar a tabela `pecas` diretamente.
+
+Enquanto uma peça está inativada por reserva, o PATCH do artesão retorna 409; ele usa o mesmo bloqueio de linha que as operações de reserva e liberação. Assim, uma edição concorrente não altera preço, situação ou disponibilidade de uma peça reservada.
+
 Serviço responsável pelos dados e pela persistência do catálogo de peças. O frontend chama a API pelo api-gateway.
 
 ## Recursos
@@ -65,7 +75,7 @@ Requer JDK 25, PostgreSQL e o banco balaio_catalog criado antes da primeira inic
 | CATALOG_SERVICE_PORT | 8081 |
 | CATALOG_DB_URL | jdbc:postgresql://localhost:5432/balaio_catalog |
 | CATALOG_DB_USERNAME | balaio_catalog_app |
-| CATALOG_DB_PASSWORD | balaio (padrão local do application.yaml; prefira configurar uma senha própria) |
+| CATALOG_DB_PASSWORD | Obrigatória; forneça por variável de ambiente ou pelo Compose (`DB_PASSWORD`/`CATALOG_DB_PASSWORD` em `platform/.env`). Não há senha padrão no serviço. |
 | JWT_PUBLIC_KEY_LOCATION | caminho `file:` para chave pública RSA PEM correspondente à chave privada do profile-service (obrigatório) |
 | JWT_ISSUER / JWT_AUDIENCE | mesmos valores configurados no profile-service (obrigatórios) |
 | PROFILE_SERVICE_URL | http://localhost:8082 |
