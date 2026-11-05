@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
+import java.time.OffsetDateTime;
 import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
@@ -56,7 +57,11 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
     @Override
     public Peca atualizar(String slug, DadosPeca alteracoes, UUID contaId) {
         var atual = pecas.obter(slug).orElseThrow(() -> naoEncontrado());
-        if (!contaId.equals(atual.proprietarioId())) throw naoEncontrado();
+        if (atual.proprietarioId() == null || !contaId.equals(atual.proprietarioId()))
+            throw new ErroPecaException(403, "SEM_PERMISSAO", null, "Você não pode alterar esta peça.");
+        if (alteracoes == null) alteracoes = new DadosPeca(null,null,null,null,null,null,null,null,null,null,null,null);
+        if (alteracoes.inativadoEm() != null)
+            throw ErroPecaException.invalido("inativadoEm", "Campo protegido.");
         var dados = validar(new DadosPeca(
                 escolher(alteracoes.nome(), atual.nome()),
                 escolher(alteracoes.tecnica(), atual.tecnica()),
@@ -78,6 +83,21 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
                 atual.ordemCatalogo(), atual.criadaEm(), atual.inativadoEm(), atual.desconto(),
                 atual.avaliacao(), atual.totalAvaliacoes());
         return pecas.salvar(peca, fotos);
+    }
+
+    @Transactional
+    @Override
+    public Peca inativar(String slug, UUID contaId) {
+        var atual = pecas.obter(slug).orElseThrow(this::naoEncontrado);
+        if (atual.proprietarioId() == null || !contaId.equals(atual.proprietarioId()))
+            throw new ErroPecaException(403, "SEM_PERMISSAO", null, "Você não pode alterar esta peça.");
+        if (atual.inativadoEm() != null) return atual;
+        var inativa = new Peca(atual.slug(), atual.nome(), atual.artesao(), atual.territorio(), atual.tecnica(),
+                atual.categoria(), atual.tipo(), atual.preco(), atual.desconto(), atual.disponibilidade(),
+                atual.prazoProducaoDias(), atual.historia(), atual.imagem(), atual.avaliacao(),
+                atual.totalAvaliacoes(), atual.situacao(), OffsetDateTime.now(ZoneOffset.UTC),
+                atual.ordemCatalogo(), atual.proprietarioId(), atual.criadaEm(), atual.fotos());
+        return pecas.salvar(inativa, null);
     }
 
     private <T> T escolher(T recebido, T atual) { return recebido == null ? atual : recebido; }
