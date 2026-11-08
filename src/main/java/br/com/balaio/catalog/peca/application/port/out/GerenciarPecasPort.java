@@ -9,6 +9,8 @@ import br.com.balaio.catalog.peca.domain.FotoPeca;
 
 public interface GerenciarPecasPort {
     void bloquearCriacao();
+    void bloquearPeca(String slug);
+    boolean possuiReservaAtiva(String slug);
     boolean existe(String slug);
     int proximaOrdem();
     Optional<Peca> obter(String slug);

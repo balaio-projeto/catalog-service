@@ -1,5 +1,15 @@
 # catalog-service
 
+## Reserva interna de peça única (PI-190)
+
+O catálogo é a autoridade da disponibilidade. `POST /internal/v1/reservas` recebe `{pedidoId,slug,chave}` e devolve `{dados:{id,pedidoId,slug,estado,expiraEm,preco,artesao,proprietarioId},erro:null}`. Preço e proprietário são registrados na reserva e permanecem estáveis nos replays. A chave de criação é estável por pedido e peça. A mesma chamada devolve a reserva ativa existente; pedido ou chave diferente recebe conflito. A reserva dura 15 minutos e retira a peça única da listagem. Peças de encomenda não usam esta operação.
+
+Após confirmação confiável do pagamento pelo commerce, `POST /internal/v1/reservas/{id}/confirmar` recebe `{pedidoId,chave:"confirmar:<id>"}` e muda a reserva para `CONSUMIDA`. Uma reserva consumida não expira e mantém a peça indisponível; a repetição devolve o resultado persistido. Uma reserva já vencida não pode ser confirmada. `POST /internal/v1/reservas/{id}/liberar` recebe `{pedidoId,chave:"liberar:<id>"}` e libera tanto uma reserva aguardando pagamento quanto uma consumida após cancelamento/reembolso. A repetição devolve o resultado persistido. Uma liberação tardia de reserva expirada ou já liberada não toca numa reserva posterior da mesma peça. `GET /internal/v1/reservas/{id}` exige o cabeçalho `X-Balaio-Pedido-Id` e permite reconciliação pelo commerce. O processo de expiração libera reservas não consumidas vencidas em intervalos de um minuto; a criação também trata uma reserva vencida antes de tentar reservar novamente.
+
+As três rotas exigem `X-Balaio-Service-Token` com o valor de `BALAIO_INTERNAL_TOKEN`, configurado fora do Git com pelo menos 32 caracteres. Sem esse segredo configurado, as rotas internas recusam chamadas. Elas não são encaminhadas pelo Gateway. O banco do commerce nunca deve atualizar a tabela `pecas` diretamente.
+
+Enquanto uma peça está inativada por reserva, o PATCH do artesão retorna 409; ele usa o mesmo bloqueio de linha que as operações de reserva e liberação. Assim, uma edição concorrente não altera preço, situação ou disponibilidade de uma peça reservada.
+
 Serviço responsável pelos dados e pela persistência do catálogo de peças. O frontend chama a API pelo api-gateway.
 
 ## Recursos
@@ -31,9 +41,15 @@ GET /api/v1/pecas?q=leao&ordenar=preco-asc
 
 A resposta contém dados como lista de peças, erro como null e paginacao com pagina, tamanho, total e totalPaginas. Os campos de cada peça seguem o tipo Peca usado pelo frontend, inclusive historia como lista de textos.
 
+`q` pesquisa por correspondência parcial, sem diferenciar maiúsculas/minúsculas nem acentos. Os campos pesquisados são nome, história, categoria, técnica, tipo e território. O texto indexável é normalizado e persistido na coluna `texto_busca`; o nome do artesão não é pesquisado, pois essa coluna contém atualmente apenas o slug/identificador do ateliê e não há projeção local do nome do perfil. Busca vazia ou em branco equivale à listagem sem termo. Caracteres `%`, `_` e `\` são tratados literalmente. A visibilidade (publicada e sem `inativado_em`) é a mesma das demais listagens públicas.
+
+Uma futura busca por nome de artesão exige uma projeção local sincronizada por API ou eventos, com política de atualização e consistência definida; o catálogo não consulta diretamente o banco do profile-service.
+
 ### Escrita
 
 `POST /api/v1/pecas` recebe `nome`, `tecnica`, `territorio`, `categoria`, `tipo`, `historia` (lista de textos), `preco`, `disponibilidade`, `prazoProducaoDias`, `situacao` e `fotos` (lista ordenada de `{id,nome,url}`). `situacao` aceita `rascunho` e `publicada`. O preço vai de zero a R$ 1.000.000,00; publicação exige preço maior que zero. `encomenda` publicada exige prazo inteiro de 1 a 120 dias; rascunho segue a regra da Fake API e pode ficar sem prazo. Fotos novas devem ser data URI JPG/PNG/WebP com até 5 MB por arquivo; até cinco fotos são aceitas. O serviço grava os bytes em tabela própria e retorna URLs estáveis. A primeira foto vira `imagem`. A resposta é `201 {"dados":{...},"erro":null}`. Slugs homônimos recebem sufixos `-2`, `-3` etc.
+
+`PATCH /api/v1/pecas/{slug}` atualiza apenas peças ativas do proprietário; `inativadoEm` não pode ser alterado pelo corpo. `DELETE /api/v1/pecas/{slug}` faz inativação lógica e é idempotente para a peça já excluída. A exclusão de peça com reserva vigente ou consumida retorna 409; liberação ou expiração da reserva não reativa uma peça excluída pelo proprietário.
 
 A migration V4 cria uma linha de controle bloqueada durante cada criação. A escolha do slug e de `ordem_catalogo` ocorre sob esse bloqueio transacional, inclusive entre instâncias do serviço, para que criações concorrentes com nomes iguais ou diferentes recebam identificadores distintos. `GET /referencias` e as regras de validação compartilham a mesma lista de valores.
 
@@ -65,7 +81,7 @@ Requer JDK 25, PostgreSQL e o banco balaio_catalog criado antes da primeira inic
 | CATALOG_SERVICE_PORT | 8081 |
 | CATALOG_DB_URL | jdbc:postgresql://localhost:5432/balaio_catalog |
 | CATALOG_DB_USERNAME | balaio_catalog_app |
-| CATALOG_DB_PASSWORD | balaio (padrão local do application.yaml; prefira configurar uma senha própria) |
+| CATALOG_DB_PASSWORD | Obrigatória; forneça por variável de ambiente ou pelo Compose (`DB_PASSWORD`/`CATALOG_DB_PASSWORD` em `platform/.env`). Não há senha padrão no serviço. |
 | JWT_PUBLIC_KEY_LOCATION | caminho `file:` para chave pública RSA PEM correspondente à chave privada do profile-service (obrigatório) |
 | JWT_ISSUER / JWT_AUDIENCE | mesmos valores configurados no profile-service (obrigatórios) |
 | PROFILE_SERVICE_URL | http://localhost:8082 |

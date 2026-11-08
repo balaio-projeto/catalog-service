@@ -46,6 +46,19 @@ public class PecasPersistenceAdapter implements ConsultarPecasPort, GerenciarPec
     }
 
     @Override
+    public void bloquearPeca(String slug) {
+        jdbc.query("SELECT slug FROM pecas WHERE slug = ? FOR UPDATE", (rs, row) -> rs.getString(1), slug);
+    }
+
+    @Override
+    public boolean possuiReservaAtiva(String slug) {
+        Integer total = jdbc.queryForObject(
+                "SELECT count(*) FROM reservas_peca WHERE slug = ? AND estado IN ('RESERVADA', 'CONSUMIDA')",
+                Integer.class, slug);
+        return total != null && total > 0;
+    }
+
+    @Override
     public boolean existe(String slug) { return repository.existsById(slug); }
 
     @Override
