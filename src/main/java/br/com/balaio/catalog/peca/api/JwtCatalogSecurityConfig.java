@@ -79,6 +79,7 @@ public class JwtCatalogSecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/v1/pecas").authenticated()
                         .requestMatchers(org.springframework.http.HttpMethod.PATCH, "/api/v1/pecas/*").authenticated()
+                        .requestMatchers(org.springframework.http.HttpMethod.DELETE, "/api/v1/pecas/*").authenticated()
                         .anyRequest().permitAll())
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> {})
                         .authenticationEntryPoint((request, response, error) -> erro(response, HttpStatus.UNAUTHORIZED,

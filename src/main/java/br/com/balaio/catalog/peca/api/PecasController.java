@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -45,7 +46,7 @@ public class PecasController {
     @PostMapping
     public ResponseEntity<PecaItemResponse> criar(@RequestBody DadosPeca dados,
             @AuthenticationPrincipal Jwt jwt, @RequestHeader("Authorization") String authorization) {
-        UUID dono = exigirArtesao(jwt);
+        UUID dono = exigirModificador(jwt);
         var criada = criarPeca.criar(dados, dono, authorization.substring(7));
         return ResponseEntity.status(HttpStatus.CREATED).body(new PecaItemResponse(PecaResponse.from(criada), null));
     }
@@ -53,8 +54,20 @@ public class PecasController {
     @PatchMapping("/{slug}")
     public PecaItemResponse atualizar(@PathVariable String slug, @RequestBody DadosPeca dados,
             @AuthenticationPrincipal Jwt jwt) {
-        UUID dono = exigirArtesao(jwt);
+        UUID dono = exigirModificador(jwt);
         return new PecaItemResponse(PecaResponse.from(atualizarPeca.atualizar(slug, dados, dono)), null);
+    }
+
+    @DeleteMapping("/{slug}")
+    public ResponseEntity<Void> inativar(@PathVariable String slug, @AuthenticationPrincipal Jwt jwt) {
+        atualizarPeca.inativar(slug, exigirModificador(jwt));
+        return ResponseEntity.noContent().build();
+    }
+
+    private UUID exigirModificador(Jwt jwt) {
+        if (jwt == null || !java.util.Set.of("artesao", "administrador", "admin").contains(jwt.getClaimAsString("papel")))
+            throw new ErroPecaException(403, "SEM_PERMISSAO", null, "Operação permitida apenas ao proprietário ou administrador.");
+        return UUID.fromString(jwt.getSubject());
     }
 
     private UUID exigirArtesao(Jwt jwt) {

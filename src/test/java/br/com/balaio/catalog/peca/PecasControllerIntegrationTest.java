@@ -155,6 +155,30 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     }
 
     @Test
+    void excluiPecaPropriaSemPermitirAlterarDisponibilidadePorPatch() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        String caminho = "/api/v1/pecas/vaso-do-sertao";
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, dados("publicada", 120), Map.class)
+                .getStatusCode().value()).isEqualTo(201);
+        assertThat(requisitar(HttpMethod.PATCH, caminho, jwt, Map.of("inativadoEm", "2026-01-01T00:00:00Z"), Map.class)
+                .getStatusCode().value()).isEqualTo(400);
+        assertThat(requisitar(HttpMethod.DELETE, caminho, token(UUID.randomUUID(), "artesao"), null, Map.class)
+                .getStatusCode().value()).isEqualTo(404);
+        assertThat(requisitar(HttpMethod.DELETE, caminho, token(UUID.randomUUID(), "comprador"), null, Map.class)
+                .getStatusCode().value()).isEqualTo(403);
+        assertThat(requisitar(HttpMethod.DELETE, caminho, jwt, null, Map.class).getStatusCode().value())
+                .isEqualTo(204);
+        assertThat(requisitar(HttpMethod.DELETE, caminho, jwt, null, Map.class).getStatusCode().value())
+                .isEqualTo(204);
+        assertThat(http.getForEntity(caminho, Map.class).getStatusCode().value()).isEqualTo(404);
+        assertThat(requisitar(HttpMethod.PATCH, caminho, jwt, Map.of("preco", 130), Map.class)
+                .getStatusCode().value()).isEqualTo(409);
+    }
+
+    @Test
     void rascunhoNaoApareceEValidaPrecoPorCampo() {
         UUID dono = UUID.randomUUID();
         when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))

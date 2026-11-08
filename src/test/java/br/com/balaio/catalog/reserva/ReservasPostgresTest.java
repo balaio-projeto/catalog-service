@@ -84,6 +84,9 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
             var editar = http.exchange("/api/v1/pecas/" + slug, HttpMethod.PATCH,
                     new HttpEntity<>(Map.of("preco", 1), editarHeaders), Map.class);
             assertThat(editar.getStatusCode().value()).isEqualTo(409);
+            var excluir = http.exchange("/api/v1/pecas/" + slug, HttpMethod.DELETE,
+                    new HttpEntity<>(editarHeaders), Map.class);
+            assertThat(excluir.getStatusCode().value()).isEqualTo(409);
 
             assertThat(liberar(id, pedido).status()).isEqualTo(200);
             assertThat(liberar(id, pedido).status()).isEqualTo(200);
@@ -99,6 +102,8 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
             UUID novoId = UUID.fromString((String) posterior.dados().get("id"));
             assertThat(confirmar(novoId, "pedido-posterior").dados().get("estado")).isEqualTo("CONSUMIDA");
             assertThat(confirmar(novoId, "pedido-posterior").dados().get("estado")).isEqualTo("CONSUMIDA");
+            assertThat(http.exchange("/api/v1/pecas/" + slug, HttpMethod.DELETE,
+                    new HttpEntity<>(editarHeaders), Map.class).getStatusCode().value()).isEqualTo(409);
             jdbc.update("UPDATE reservas_peca SET expira_em = now() - interval '1 second' WHERE id = ?", novoId);
             reservas.expirar();
             assertThat(jdbc.queryForObject("SELECT estado FROM reservas_peca WHERE id = ?", String.class, novoId)).isEqualTo("CONSUMIDA");
@@ -116,6 +121,26 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
             assertThat(liberar(expiravelId, "pedido-expiravel").dados().get("estado")).isEqualTo("EXPIRADA");
             assertThat(jdbc.queryForObject("SELECT inativado_em IS NOT NULL FROM pecas WHERE slug = ?", Boolean.class, slug)).isTrue();
         }
+    }
+
+    @Test
+    void exclusaoAposLiberacaoNaoERevertidaPorRepeticaoDoComando() {
+        String slug = jdbc.query("SELECT slug FROM pecas WHERE disponibilidade = 'unica' AND situacao = 'publicada' AND inativado_em IS NULL LIMIT 1",
+                (rs, row) -> rs.getString(1)).getFirst();
+        UUID dono = UUID.randomUUID();
+        jdbc.update("UPDATE pecas SET proprietario_id = ? WHERE slug = ?", dono, slug);
+        String pedido = "pedido-exclusao-" + UUID.randomUUID();
+        UUID reservaId = UUID.fromString((String) criar(pedido, slug).dados().get("id"));
+        assertThat(liberar(reservaId, pedido).status()).isEqualTo(200);
+
+        var headers = new HttpHeaders();
+        headers.setBearerAuth(token(dono, "artesao"));
+        assertThat(http.exchange("/api/v1/pecas/" + slug, HttpMethod.DELETE,
+                new HttpEntity<>(headers), Map.class).getStatusCode().value()).isEqualTo(204);
+        assertThat(liberar(reservaId, pedido).status()).isEqualTo(200);
+        assertThat(jdbc.queryForObject("SELECT inativado_em IS NOT NULL FROM pecas WHERE slug = ?",
+                Boolean.class, slug)).isTrue();
+        assertThat(criar("outro-" + pedido, slug).status()).isEqualTo(409);
     }
 
     private Resultado criar(String pedido, String slug) {

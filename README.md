@@ -41,9 +41,15 @@ GET /api/v1/pecas?q=leao&ordenar=preco-asc
 
 A resposta contém dados como lista de peças, erro como null e paginacao com pagina, tamanho, total e totalPaginas. Os campos de cada peça seguem o tipo Peca usado pelo frontend, inclusive historia como lista de textos.
 
+`q` pesquisa por correspondência parcial, sem diferenciar maiúsculas/minúsculas nem acentos. Os campos pesquisados são nome, história, categoria, técnica, tipo e território. O texto indexável é normalizado e persistido na coluna `texto_busca`; o nome do artesão não é pesquisado, pois essa coluna contém atualmente apenas o slug/identificador do ateliê e não há projeção local do nome do perfil. Busca vazia ou em branco equivale à listagem sem termo. Caracteres `%`, `_` e `\` são tratados literalmente. A visibilidade (publicada e sem `inativado_em`) é a mesma das demais listagens públicas.
+
+Uma futura busca por nome de artesão exige uma projeção local sincronizada por API ou eventos, com política de atualização e consistência definida; o catálogo não consulta diretamente o banco do profile-service.
+
 ### Escrita
 
 `POST /api/v1/pecas` recebe `nome`, `tecnica`, `territorio`, `categoria`, `tipo`, `historia` (lista de textos), `preco`, `disponibilidade`, `prazoProducaoDias`, `situacao` e `fotos` (lista ordenada de `{id,nome,url}`). `situacao` aceita `rascunho` e `publicada`. O preço vai de zero a R$ 1.000.000,00; publicação exige preço maior que zero. `encomenda` publicada exige prazo inteiro de 1 a 120 dias; rascunho segue a regra da Fake API e pode ficar sem prazo. Fotos novas devem ser data URI JPG/PNG/WebP com até 5 MB por arquivo; até cinco fotos são aceitas. O serviço grava os bytes em tabela própria e retorna URLs estáveis. A primeira foto vira `imagem`. A resposta é `201 {"dados":{...},"erro":null}`. Slugs homônimos recebem sufixos `-2`, `-3` etc.
+
+`PATCH /api/v1/pecas/{slug}` atualiza apenas peças ativas do proprietário; `inativadoEm` não pode ser alterado pelo corpo. `DELETE /api/v1/pecas/{slug}` faz inativação lógica e é idempotente para a peça já excluída. A exclusão de peça com reserva vigente ou consumida retorna 409; liberação ou expiração da reserva não reativa uma peça excluída pelo proprietário.
 
 A migration V4 cria uma linha de controle bloqueada durante cada criação. A escolha do slug e de `ordem_catalogo` ocorre sob esse bloqueio transacional, inclusive entre instâncias do serviço, para que criações concorrentes com nomes iguais ou diferentes recebam identificadores distintos. `GET /referencias` e as regras de validação compartilham a mesma lista de valores.
 
