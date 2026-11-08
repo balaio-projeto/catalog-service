@@ -23,15 +23,35 @@ public class ReservaService {
 
     public record Criar(String pedidoId, String slug, String chave) { }
     public record Liberar(String pedidoId, String chave) { }
+    public record Confirmar(String pedidoId, String chave) { }
     public record Reserva(UUID id, String pedidoId, String slug, String estado,
                           OffsetDateTime expiraEm, BigDecimal preco, String artesao, UUID proprietarioId) { }
+    public record Cotacao(String slug, BigDecimal preco, String disponibilidade, String artesao,
+                          UUID proprietarioId) { }
+
+    @Transactional(readOnly = true)
+    public Cotacao cotar(String slug) {
+        if (vazio(slug) || slug.length() > 160)
+            throw erro(400, "REQUISICAO_INVALIDA", "Peça inválida.");
+        return jdbc.query("SELECT slug, round(preco * (1 - desconto / 100.0), 2) AS preco, disponibilidade, artesao, proprietario_id FROM pecas WHERE slug = ? AND situacao = 'publicada' AND inativado_em IS NULL",
+                (rs, row) -> new Cotacao(rs.getString("slug"), rs.getBigDecimal("preco"),
+                        rs.getString("disponibilidade"), rs.getString("artesao"),
+                        (UUID) rs.getObject("proprietario_id")), slug).stream().findFirst()
+                .orElseThrow(() -> erro(409, "PECA_INDISPONIVEL", "Peça indisponível."));
+    }
 
     @Transactional
     public Reserva reservar(Criar comando) {
         if (comando == null || vazio(comando.pedidoId()) || vazio(comando.slug()) || vazio(comando.chave())
                 || comando.pedidoId().length() > 160 || comando.slug().length() > 160 || comando.chave().length() > 160)
             throw erro(400, "REQUISICAO_INVALIDA", "Informe pedido, peça e chave idempotente.");
-        var peca = jdbc.query("SELECT slug, preco, artesao, proprietario_id, disponibilidade, situacao, inativado_em FROM pecas WHERE slug = ? FOR UPDATE",
+        // Serializa também comandos com a mesma chave para slugs diferentes.
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", comando.chave());
+        var mesmaChave = buscarPorChave(comando.chave());
+        if (mesmaChave != null && (!mesmaChave.pedidoId().equals(comando.pedidoId())
+                || !mesmaChave.slug().equals(comando.slug())))
+            throw erro(409, "RESERVA_CONFLITANTE", "Chave já vinculada a outro pedido ou peça.");
+        var peca = jdbc.query("SELECT slug, round(preco * (1 - desconto / 100.0), 2) AS preco, artesao, proprietario_id, disponibilidade, situacao, inativado_em FROM pecas WHERE slug = ? FOR UPDATE",
                 (rs, row) -> new Peca(rs.getString("slug"), rs.getBigDecimal("preco"), rs.getString("artesao"),
                         (UUID) rs.getObject("proprietario_id"),
                         rs.getString("disponibilidade"), rs.getString("situacao"),
@@ -42,7 +62,8 @@ public class ReservaService {
         boolean expirou = expirarDaPeca(peca.slug());
         var anterior = buscarPorPedido(comando.pedidoId(), comando.slug());
         if (anterior != null) {
-            if (anterior.chave().equals(comando.chave()) && "RESERVADA".equals(anterior.estado()))
+            if (anterior.chave().equals(comando.chave())
+                    && ("RESERVADA".equals(anterior.estado()) || "CONSUMIDA".equals(anterior.estado())))
                 return resposta(anterior);
             throw erro(409, "RESERVA_CONFLITANTE", "Reserva anterior incompatível ou expirada.");
         }
@@ -67,13 +88,32 @@ public class ReservaService {
         var reserva = buscarPorId(id);
         if (!reserva.pedidoId().equals(comando.pedidoId()) || !comando.chave().equals("liberar:" + id))
             throw erro(409, "RESERVA_CONFLITANTE", "Pedido ou chave de liberação incompatível.");
-        if ("RESERVADA".equals(reserva.estado())) {
+        if ("RESERVADA".equals(reserva.estado()) || "CONSUMIDA".equals(reserva.estado())) {
             jdbc.update("UPDATE reservas_peca SET estado = 'LIBERADA' WHERE id = ?", id);
             jdbc.update("UPDATE pecas SET inativado_em = NULL WHERE slug = ?", slug);
             reserva = new Linha(reserva.id(), reserva.pedidoId(), reserva.slug(), reserva.preco(), reserva.artesao(),
                     reserva.proprietarioId(), reserva.chave(), "LIBERADA", reserva.expiraEm());
         }
         return resposta(reserva);
+    }
+
+    @Transactional
+    public Reserva confirmar(UUID id, Confirmar comando) {
+        if (id == null || comando == null || vazio(comando.pedidoId()) || vazio(comando.chave())
+                || comando.pedidoId().length() > 160 || comando.chave().length() > 160)
+            throw erro(400, "REQUISICAO_INVALIDA", "Informe pedido e chave idempotente.");
+        var slug = jdbc.query("SELECT slug FROM reservas_peca WHERE id = ?", (rs, row) -> rs.getString(1), id)
+                .stream().findFirst().orElseThrow(() -> erro(404, "RESERVA_NAO_ENCONTRADA", "Reserva não encontrada."));
+        jdbc.query("SELECT slug FROM pecas WHERE slug = ? FOR UPDATE", (rs, row) -> rs.getString(1), slug);
+        var reserva = buscarPorId(id);
+        if (!reserva.pedidoId().equals(comando.pedidoId()) || !comando.chave().equals("confirmar:" + id))
+            throw erro(409, "RESERVA_CONFLITANTE", "Pedido ou chave de confirmação incompatível.");
+        if ("CONSUMIDA".equals(reserva.estado())) return resposta(reserva);
+        if (!"RESERVADA".equals(reserva.estado()) || !reserva.expiraEm().isAfter(OffsetDateTime.now(ZoneOffset.UTC)))
+            throw erro(409, "RESERVA_EXPIRADA", "Reserva indisponível para confirmação.");
+        jdbc.update("UPDATE reservas_peca SET estado = 'CONSUMIDA' WHERE id = ?", id);
+        return resposta(new Linha(reserva.id(), reserva.pedidoId(), reserva.slug(), reserva.preco(), reserva.artesao(),
+                reserva.proprietarioId(), reserva.chave(), "CONSUMIDA", reserva.expiraEm()));
     }
 
     @Transactional(readOnly = true)
@@ -104,6 +144,11 @@ public class ReservaService {
     private Linha buscarPorPedido(String pedidoId, String slug) {
         return jdbc.query("SELECT id, pedido_id, slug, preco, artesao, proprietario_id, chave, estado, expira_em FROM reservas_peca WHERE pedido_id = ? AND slug = ?",
                 (rs, row) -> linha(rs), pedidoId, slug).stream().findFirst().orElse(null);
+    }
+
+    private Linha buscarPorChave(String chave) {
+        return jdbc.query("SELECT id, pedido_id, slug, preco, artesao, proprietario_id, chave, estado, expira_em FROM reservas_peca WHERE chave = ?",
+                (rs, row) -> linha(rs), chave).stream().findFirst().orElse(null);
     }
 
     private Linha buscarPorId(UUID id) {
