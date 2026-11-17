@@ -496,6 +496,75 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
         }
     }
 
+    @Test
+    void disponibilidadeValidaPrazoPreservaAlteracaoParcialELimpaPrazoAoSairDeEncomenda() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, dados("publicada", 100), Map.class)
+                .getStatusCode().value()).isEqualTo(201);
+        org.mockito.Mockito.clearInvocations(artesaos);
+        String caminho = "/api/v1/pecas/vaso-do-sertao";
+        for (var alteracao : List.of(Map.of("disponibilidade", "encomenda"),
+                Map.of("disponibilidade", "encomenda", "prazoProducaoDias", 0),
+                Map.of("disponibilidade", "encomenda", "prazoProducaoDias", 121),
+                Map.of("disponibilidade", "encomenda", "prazoProducaoDias", 1.5))) {
+            var invalida = requisitar(HttpMethod.PATCH, caminho, jwt, alteracao, Map.class);
+            assertThat(invalida.getStatusCode().value()).isEqualTo(400);
+            assertThat((Map) invalida.getBody().get("erro")).containsEntry("campo", "prazoProducaoDias");
+        }
+        var encomenda = requisitar(HttpMethod.PATCH, caminho, jwt,
+                Map.of("disponibilidade", "encomenda", "prazoProducaoDias", 1), Map.class);
+        assertThat(encomenda.getStatusCode().value()).isEqualTo(200);
+        assertThat((Map) encomenda.getBody().get("dados")).containsEntry("disponibilidade", "encomenda")
+                .containsEntry("prazoProducaoDias", 1);
+        var prazo = requisitar(HttpMethod.PATCH, caminho, jwt, Map.of("prazoProducaoDias", 120), Map.class);
+        assertThat(prazo.getStatusCode().value()).isEqualTo(200);
+        assertThat((Map) prazo.getBody().get("dados")).containsEntry("disponibilidade", "encomenda")
+                .containsEntry("prazoProducaoDias", 120);
+        var unica = requisitar(HttpMethod.PATCH, caminho, jwt, Map.of("disponibilidade", "unica"), Map.class);
+        assertThat(unica.getStatusCode().value()).isEqualTo(200);
+        assertThat((Map) unica.getBody().get("dados")).containsEntry("disponibilidade", "unica")
+                .containsEntry("prazoProducaoDias", null);
+        assertThat((Map) http.getForEntity(caminho, Map.class).getBody().get("dados"))
+                .containsEntry("disponibilidade", "unica");
+        assertThat(requisitar(HttpMethod.PATCH, caminho, token(UUID.randomUUID(), "artesao"),
+                Map.of("disponibilidade", "disponivel"), Map.class).getStatusCode().value()).isEqualTo(404);
+        for (String papel : List.of("comprador", "admin", "administrador")) {
+            assertThat(requisitar(HttpMethod.PATCH, caminho, token(dono, papel),
+                    Map.of("disponibilidade", "disponivel"), Map.class).getStatusCode().value()).isEqualTo(403);
+        }
+        org.mockito.Mockito.verifyNoInteractions(artesaos);
+    }
+
+    @Test
+    void painelMostraInativasSoAoDonoSemPermitirReativacaoPorPatch() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, dados("publicada", 100), Map.class)
+                .getStatusCode().value()).isEqualTo(201);
+        String painel = "/api/v1/artesaos/artesao-" + dono + "/pecas";
+        var lista = requisitar(HttpMethod.GET, painel, jwt, null, Map.class);
+        assertThat(((List<Map>) lista.getBody().get("dados")).getFirst())
+                .containsEntry("estadoVenda", "disponivel").doesNotContainKey("vendidaEmPedido");
+        String caminho = "/api/v1/pecas/vaso-do-sertao";
+        assertThat(requisitar(HttpMethod.DELETE, caminho, jwt, null, Map.class).getStatusCode().value()).isEqualTo(204);
+        var propria = requisitar(HttpMethod.GET, painel, jwt, null, Map.class);
+        Map inativa = ((List<Map>) propria.getBody().get("dados")).getFirst();
+        assertThat(inativa).containsEntry("estadoVenda", "inativada");
+        assertThat(inativa.get("inativadoEm")).isNotNull();
+        for (String outroToken : List.of(token(UUID.randomUUID(), "artesao"), token(dono, "comprador"))) {
+            assertThat((List<?>) requisitar(HttpMethod.GET, painel, outroToken, null, Map.class)
+                    .getBody().get("dados")).isEmpty();
+        }
+        assertThat((List<?>) http.getForEntity(painel, Map.class).getBody().get("dados")).isEmpty();
+        assertThat(requisitar(HttpMethod.PATCH, caminho, jwt, Map.of("disponibilidade", "disponivel"), Map.class)
+                .getStatusCode().value()).isEqualTo(409);
+    }
+
     private List<ResponseEntity<Map>> criarAoMesmoTempo(String jwt, String nomeA, String nomeB) throws Exception {
         var inicio = new CountDownLatch(1);
         try (var executor = Executors.newFixedThreadPool(2)) {

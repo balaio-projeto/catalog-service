@@ -22,7 +22,9 @@ public class ArtesaoPecasController {
     public PecasListResponse listar(@PathVariable String slug, @AuthenticationPrincipal Jwt jwt) {
         var dono = PecasController.proprietario(jwt);
         if (dono != null && !slug.equals("artesao-" + dono)) dono = null;
-        var dados = consultar.listarPorArtesao(slug, dono).stream().map(PecaResponse::from).toList();
+        var dados = dono == null
+                ? consultar.listarPorArtesao(slug, null).stream().map(PecaResponse::from).toList()
+                : consultar.listarPainel(slug, dono).stream().map(PecaResponse::from).toList();
         return new PecasListResponse(dados, null, null);
     }
 }

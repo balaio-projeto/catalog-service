@@ -4,6 +4,9 @@ import java.math.BigDecimal;
 import java.util.List;
 import br.com.balaio.catalog.peca.domain.Peca;
 import br.com.balaio.catalog.peca.domain.FotoPeca;
+import br.com.balaio.catalog.peca.domain.PecaPainel;
+import java.util.Locale;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 public record PecaResponse(
         String slug,
@@ -26,9 +29,20 @@ public record PecaResponse(
         List<String> ordemFotos,
         String criadaEm,
         List<String> materiais,
-        boolean autentica) {
+        boolean autentica,
+        String inativadoEm,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String vendidaEmPedido,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String estadoVenda) {
 
     public static PecaResponse from(Peca peca) {
+        return from(peca, null, null);
+    }
+
+    public static PecaResponse from(PecaPainel painel) {
+        return from(painel.peca(), painel.vendidaEmPedido(), painel.estado().name().toLowerCase(Locale.ROOT));
+    }
+
+    private static PecaResponse from(Peca peca, String pedido, String estadoVenda) {
         return new PecaResponse(
                 peca.slug(),
                 peca.nome(),
@@ -49,6 +63,7 @@ public record PecaResponse(
                 peca.fotos(),
                 peca.fotos().stream().map(FotoPeca::id).toList(),
                 peca.criadaEm() == null ? null : peca.criadaEm().toString(),
-                peca.materiais(), peca.autentica());
+                peca.materiais(), peca.autentica(),
+                peca.inativadoEm() == null ? null : peca.inativadoEm().toString(), pedido, estadoVenda);
     }
 }

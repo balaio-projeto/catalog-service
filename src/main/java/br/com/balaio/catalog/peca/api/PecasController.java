@@ -54,7 +54,8 @@ public class PecasController {
     @PatchMapping("/{slug}")
     public PecaItemResponse atualizar(@PathVariable String slug, @RequestBody DadosPeca dados,
             @AuthenticationPrincipal Jwt jwt) {
-        UUID dono = exigirModificador(jwt);
+        UUID dono = dados != null && (dados.disponibilidade() != null || dados.prazoProducaoDias() != null)
+                ? exigirArtesao(jwt) : exigirModificador(jwt);
         return new PecaItemResponse(PecaResponse.from(atualizarPeca.atualizar(slug, dados, dono)), null);
     }
 
