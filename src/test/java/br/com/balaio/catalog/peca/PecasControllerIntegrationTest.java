@@ -48,6 +48,9 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     @Autowired
     private PlatformTransactionManager transactionManager;
 
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
+
     @MockitoBean
     private ResolverArtesaoPort artesaos;
 
@@ -411,6 +414,86 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
         assertThat((List<?>) resposta.getBody().get("dados")).hasSize(100);
         assertThat(http.getForEntity("/api/v1/pecas/peca-0/relacionadas?limite=abc", Map.class)
                 .getStatusCode().value()).isEqualTo(400);
+    }
+
+    @Test
+    void referenciasPersistidasMantemOrdemEPassamAValerNaCriacaoSemListasJava() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        // Inserção fora da ordem física para conferir a ordem de curadoria.
+        jdbc.update("INSERT INTO referencias_catalogo (grupo, valor, ordem) VALUES ('tecnicas', 'Tecnica B', 102)");
+        jdbc.update("INSERT INTO referencias_catalogo (grupo, valor, ordem) VALUES ('tecnicas', 'Tecnica A', 101)");
+        try {
+            var payload = new java.util.HashMap<String, Object>(dados("publicada", 100));
+            payload.put("tecnica", "Tecnica A");
+            assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", token(dono, "artesao"), payload, Map.class)
+                    .getStatusCode().value()).isEqualTo(201);
+            var resposta = http.getForEntity("/api/v1/referencias", Map.class);
+            assertThat(resposta.getStatusCode().value()).isEqualTo(200);
+            var tecnicas = (List<String>) ((Map) resposta.getBody().get("dados")).get("tecnicas");
+            assertThat(tecnicas).containsSubsequence("Tecnica A", "Tecnica B");
+            assertThat(tecnicas.indexOf("Tecnica A")).isLessThan(tecnicas.indexOf("Tecnica B"));
+            var detalhe = http.getForEntity("/api/v1/pecas/vaso-do-sertao", Map.class);
+            assertThat((Map) detalhe.getBody().get("dados")).containsEntry("tecnica", "Tecnica A");
+        } finally {
+            jdbc.update("DELETE FROM referencias_catalogo WHERE grupo = 'tecnicas' AND valor IN ('Tecnica A', 'Tecnica B')");
+        }
+    }
+
+    @Test
+    void referenciasSemDadosRetornamListasVaziasSemFallbackFicticio() {
+        var anteriores = jdbc.queryForList("SELECT grupo, valor, ordem FROM referencias_catalogo");
+        jdbc.update("DELETE FROM referencias_catalogo");
+        try {
+            var resposta = http.getForEntity("/api/v1/referencias", Map.class);
+            assertThat(resposta.getStatusCode().value()).isEqualTo(200);
+            assertThat(resposta.getBody()).containsEntry("erro", null).doesNotContainKey("paginacao");
+            var referencias = (Map) resposta.getBody().get("dados");
+            assertThat(referencias).hasSize(5);
+            for (String grupo : List.of("tecnicas", "territorios", "categorias", "tipos", "etiquetas")) {
+                assertThat((List<?>) referencias.get(grupo)).isEmpty();
+            }
+            var invalida = requisitar(HttpMethod.POST, "/api/v1/pecas", token(UUID.randomUUID(), "artesao"),
+                    dados("publicada", 100), Map.class);
+            assertThat(invalida.getStatusCode().value()).isEqualTo(400);
+            assertThat((Map) invalida.getBody().get("erro")).containsEntry("campo", "tecnica");
+        } finally {
+            anteriores.forEach(linha -> jdbc.update(
+                    "INSERT INTO referencias_catalogo (grupo, valor, ordem) VALUES (?, ?, ?)",
+                    linha.get("grupo"), linha.get("valor"), linha.get("ordem")));
+        }
+    }
+
+    @Test
+    void historicoPreservaNarrativaNaOrdemInclusiveAposInativacao() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        var payload = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        var narrativa = List.of("Origem", "Preparação", "Acabamento");
+        payload.put("historia", narrativa);
+        String jwt = token(dono, "artesao");
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, payload, Map.class)
+                .getStatusCode().value()).isEqualTo(201);
+        String caminho = "/api/v1/pecas/vaso-do-sertao";
+        var antes = http.getForEntity(caminho + "/historico", Map.class);
+        assertThat(antes.getStatusCode().value()).isEqualTo(200);
+        assertThat((Map) antes.getBody().get("dados")).containsEntry("historia", narrativa);
+        assertThat(requisitar(HttpMethod.DELETE, caminho, jwt, null, Map.class).getStatusCode().value()).isEqualTo(204);
+        assertThat(http.getForEntity(caminho, Map.class).getStatusCode().value()).isEqualTo(404);
+        var depois = http.getForEntity(caminho + "/historico", Map.class);
+        assertThat(depois.getStatusCode().value()).isEqualTo(200);
+        assertThat(depois.getBody()).containsEntry("erro", null).doesNotContainKey("paginacao");
+        assertThat((Map) depois.getBody().get("dados")).containsEntry("historia", narrativa);
+
+        persistir(peca("rascunho", "Rascunho", "100", "0", 2, "rascunho"));
+        for (String slug : List.of("inexistente", "rascunho")) {
+            var ausente = http.getForEntity("/api/v1/pecas/" + slug + "/historico", Map.class);
+            assertThat(ausente.getStatusCode().value()).isEqualTo(404);
+            assertThat(ausente.getBody()).containsEntry("dados", null);
+            assertThat((Map) ausente.getBody().get("erro")).containsEntry("codigo", "RECURSO_NAO_ENCONTRADO");
+        }
     }
 
     private List<ResponseEntity<Map>> criarAoMesmoTempo(String jwt, String nomeA, String nomeB) throws Exception {
