@@ -47,8 +47,10 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
         int sufixo = 2;
         while (pecas.existe(slug)) slug = base + "-" + sufixo++;
         var fotos = prepararFotos(valido.fotos(), List.of());
-        var peca = montar(slug, artesao, contaId, valido, fotos, pecas.proximaOrdem(),
-                OffsetDateTime.now(ZoneOffset.UTC), null, BigDecimal.ZERO, null, null);
+        int ordem = pecas.proximaOrdem();
+        var ciclo = new Ciclo(OffsetDateTime.now(ZoneOffset.UTC), null, ordem);
+        var avaliacoes = new Avaliacoes(null, null);
+        var peca = montar(slug, artesao, contaId, valido, fotos, ciclo, BigDecimal.ZERO, avaliacoes);
         return pecas.salvar(peca, fotos);
     }
 
@@ -80,10 +82,11 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
                 escolher(alteracoes.situacao(), atual.situacao()),
                 alteracoes.fotos(), null));
         var fotos = dados.fotos() == null ? null : prepararFotos(dados.fotos(), atual.fotos());
+        var ciclo = new Ciclo(atual.criadaEm(), atual.inativadoEm(), atual.ordemCatalogo());
+        var avaliacoes = new Avaliacoes(atual.avaliacao(), atual.totalAvaliacoes());
         var peca = montar(slug, atual.artesao(), contaId, dados,
                 fotos == null ? atual.fotos().stream().map(f -> new GerenciarPecasPort.FotoGravacao(f, null, null)).toList() : fotos,
-                atual.ordemCatalogo(), atual.criadaEm(), atual.inativadoEm(), atual.desconto(),
-                atual.avaliacao(), atual.totalAvaliacoes());
+                ciclo, atual.desconto(), avaliacoes);
         return pecas.salvar(peca, fotos);
     }
 
@@ -110,16 +113,20 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
 
     private <T> T escolher(T recebido, T atual) { return recebido == null ? atual : recebido; }
 
+    private record Avaliacoes(BigDecimal media, Integer total) {}
+
+    private record Ciclo(OffsetDateTime criadaEm, OffsetDateTime inativadoEm, int ordem) {}
+
     private Peca montar(String slug, String artesao, UUID dono, DadosPeca dados,
-            List<GerenciarPecasPort.FotoGravacao> fotos, int ordem, OffsetDateTime criadaEm,
-            OffsetDateTime inativadoEm, BigDecimal desconto, BigDecimal avaliacao, Integer totalAvaliacoes) {
+            List<GerenciarPecasPort.FotoGravacao> fotos, Ciclo ciclo,
+            BigDecimal desconto, Avaliacoes avaliacoes) {
         var metadados = fotos.stream().map(GerenciarPecasPort.FotoGravacao::foto).toList();
         String imagem = metadados.isEmpty() ? "/fotos/ImagemBase.webp" : metadados.getFirst().url();
         return new Peca(slug, dados.nome(), artesao, dados.territorio(), dados.tecnica(), dados.categoria(),
                 dados.tipo(), dados.preco(), desconto, dados.disponibilidade(),
                 dados.prazoProducaoDias() == null ? null : dados.prazoProducaoDias().intValueExact(),
-                dados.historia(), imagem, avaliacao, totalAvaliacoes, dados.situacao(), inativadoEm, ordem,
-                dono, criadaEm, metadados);
+                dados.historia(), imagem, avaliacoes.media(), avaliacoes.total(), dados.situacao(),
+                ciclo.inativadoEm(), ciclo.ordem(), dono, ciclo.criadaEm(), metadados);
     }
 
     private DadosPeca validar(DadosPeca entrada) {
