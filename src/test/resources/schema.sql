@@ -24,7 +24,9 @@ CREATE TABLE pecas (
     ordem_catalogo INTEGER NOT NULL UNIQUE,
     texto_busca CLOB NOT NULL,
     proprietario_id UUID,
-    criada_em TIMESTAMP WITH TIME ZONE
+    criada_em TIMESTAMP WITH TIME ZONE,
+    materiais JSON NOT NULL DEFAULT '[]',
+    autentica BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE peca_fotos (

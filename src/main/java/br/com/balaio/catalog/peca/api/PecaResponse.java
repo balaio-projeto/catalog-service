@@ -24,7 +24,9 @@ public record PecaResponse(
         String situacao,
         List<FotoPeca> fotos,
         List<String> ordemFotos,
-        String criadaEm) {
+        String criadaEm,
+        List<String> materiais,
+        boolean autentica) {
 
     public static PecaResponse from(Peca peca) {
         return new PecaResponse(
@@ -46,6 +48,7 @@ public record PecaResponse(
                 peca.situacao(),
                 peca.fotos(),
                 peca.fotos().stream().map(FotoPeca::id).toList(),
-                peca.criadaEm() == null ? null : peca.criadaEm().toString());
+                peca.criadaEm() == null ? null : peca.criadaEm().toString(),
+                peca.materiais(), peca.autentica());
     }
 }

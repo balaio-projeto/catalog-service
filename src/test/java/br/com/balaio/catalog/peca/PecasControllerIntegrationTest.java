@@ -255,6 +255,49 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     }
 
     @Test
+    void persisteMateriaisECalculaSeloDeAutenticidadeNoServidor() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        var payload = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        payload.put("materiais", List.of("  Barro  ", "Pigmento natural"));
+
+        var criada = requisitar(HttpMethod.POST, "/api/v1/pecas", token(dono, "artesao"), payload, Map.class);
+        assertThat(criada.getStatusCode().value()).isEqualTo(201);
+        Map dadosCriados = (Map) criada.getBody().get("dados");
+        assertThat(dadosCriados).containsEntry("materiais", List.of("Barro", "Pigmento natural"))
+                .containsEntry("autentica", true);
+
+        var consultada = http.getForEntity("/api/v1/pecas/vaso-do-sertao", Map.class);
+        assertThat(((Map) consultada.getBody().get("dados")))
+                .containsEntry("materiais", List.of("Barro", "Pigmento natural"))
+                .containsEntry("autentica", true);
+
+        var editada = requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", token(dono, "artesao"),
+                Map.of("materiais", List.of("Madeira")), Map.class);
+        assertThat(((Map) editada.getBody().get("dados")))
+                .containsEntry("materiais", List.of("Madeira"))
+                .containsEntry("autentica", true);
+        var semMateriais = requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", token(dono, "artesao"),
+                Map.of("materiais", List.of()), Map.class);
+        assertThat(((Map) semMateriais.getBody().get("dados")))
+                .containsEntry("materiais", List.of())
+                .containsEntry("autentica", false);
+    }
+
+    @Test
+    void rejeitaMateriaisInvalidos() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        var payload = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        payload.put("materiais", List.of("Barro", "Barro"));
+        var resposta = requisitar(HttpMethod.POST, "/api/v1/pecas", token(dono, "artesao"), payload, Map.class);
+        assertThat(resposta.getStatusCode().value()).isEqualTo(400);
+        assertThat((Map) resposta.getBody().get("erro")).containsEntry("campo", "materiais");
+    }
+
+    @Test
     void guardaFotosNoBancoEServeCapaPelaUrlPublica() {
         UUID dono = UUID.randomUUID();
         when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))

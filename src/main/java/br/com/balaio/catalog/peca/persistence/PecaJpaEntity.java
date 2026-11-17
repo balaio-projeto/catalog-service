@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.ArrayList;
 
 import org.hibernate.annotations.Formula;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -86,6 +87,13 @@ public class PecaJpaEntity {
     @Column(name = "criada_em")
     private OffsetDateTime criadaEm;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(nullable = false, columnDefinition = "jsonb")
+    private List<String> materiais = new ArrayList<>();
+
+    @Column(nullable = false)
+    private boolean autentica;
+
     @Formula("preco * (1 - desconto / 100.0)")
     private BigDecimal precoComDesconto;
 
@@ -114,6 +122,8 @@ public class PecaJpaEntity {
         entity.ordemCatalogo = peca.ordemCatalogo();
         entity.proprietarioId = peca.proprietarioId();
         entity.criadaEm = peca.criadaEm();
+        entity.materiais = peca.materiais();
+        entity.autentica = peca.autentica();
         entity.textoBusca = normalizarTexto(String.join(" ", peca.nome(), peca.artesao(), peca.territorio(),
                 peca.tecnica(), peca.categoria(), peca.tipo()));
         return entity;
@@ -123,7 +133,7 @@ public class PecaJpaEntity {
         return new Peca(slug, nome, artesao, territorio, tecnica, categoria, tipo, preco, desconto,
                 disponibilidade, prazoProducaoDias, historia == null ? List.of() : Arrays.asList(historia.clone()),
                 imagem, avaliacao, totalAvaliacoes, situacao, inativadoEm, ordemCatalogo,
-                proprietarioId, criadaEm, List.of());
+                proprietarioId, criadaEm, List.of(), materiais, autentica);
     }
 
     private static String normalizarTexto(String texto) {

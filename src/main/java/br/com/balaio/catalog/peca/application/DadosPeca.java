@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record DadosPeca(String nome, String tecnica, String territorio, String categoria, String tipo,
-        List<String> historia, BigDecimal preco, String disponibilidade, BigDecimal prazoProducaoDias,
+        List<String> historia, List<String> materiais, BigDecimal preco, String disponibilidade, BigDecimal prazoProducaoDias,
         String situacao, List<FotoRecebida> fotos, String inativadoEm) {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record FotoRecebida(String id, String nome, String url) {

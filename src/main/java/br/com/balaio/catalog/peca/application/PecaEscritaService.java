@@ -63,7 +63,7 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
         if (atual.inativadoEm() != null)
             throw new ErroPecaException(409, "PECA_INDISPONIVEL", null, "Peça indisponível para edição.");
         if (alteracoes == null)
-            alteracoes = new DadosPeca(null, null, null, null, null, null, null, null, null, null, null, null);
+            alteracoes = new DadosPeca(null, null, null, null, null, null, null, null, null, null, null, null, null);
         if (alteracoes.inativadoEm() != null)
             throw ErroPecaException.invalido("inativadoEm", "Campo protegido.");
         var dados = validar(new DadosPeca(
@@ -73,6 +73,7 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
                 escolher(alteracoes.categoria(), atual.categoria()),
                 escolher(alteracoes.tipo(), atual.tipo()),
                 escolher(alteracoes.historia(), atual.historia()),
+                escolher(alteracoes.materiais(), atual.materiais()),
                 escolher(alteracoes.preco(), atual.preco()),
                 escolher(alteracoes.disponibilidade(), atual.disponibilidade()),
                 alteracoes.prazoProducaoDias() != null ? alteracoes.prazoProducaoDias()
@@ -103,7 +104,8 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
                 atual.categoria(), atual.tipo(), atual.preco(), atual.desconto(), atual.disponibilidade(),
                 atual.prazoProducaoDias(), atual.historia(), atual.imagem(), atual.avaliacao(),
                 atual.totalAvaliacoes(), atual.situacao(), OffsetDateTime.now(ZoneOffset.UTC),
-                atual.ordemCatalogo(), atual.proprietarioId(), atual.criadaEm(), atual.fotos());
+                atual.ordemCatalogo(), atual.proprietarioId(), atual.criadaEm(), atual.fotos(),
+                atual.materiais(), atual.autentica());
         return pecas.salvar(inativa, null);
     }
 
@@ -126,7 +128,14 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
                 dados.tipo(), dados.preco(), desconto, dados.disponibilidade(),
                 dados.prazoProducaoDias() == null ? null : dados.prazoProducaoDias().intValueExact(),
                 dados.historia(), imagem, avaliacoes.media(), avaliacoes.total(), dados.situacao(),
-                ciclo.inativadoEm(), ciclo.ordem(), dono, ciclo.criadaEm(), metadados);
+                ciclo.inativadoEm(), ciclo.ordem(), dono, ciclo.criadaEm(), metadados,
+                dados.materiais(), autentica(dados.tecnica(), dados.materiais(), dados.historia()));
+    }
+
+    private boolean autentica(String tecnica, List<String> materiais, List<String> historia) {
+        return tecnica != null && !tecnica.isBlank()
+                && materiais != null && materiais.stream().anyMatch(m -> m != null && !m.isBlank())
+                && historia != null && historia.stream().anyMatch(h -> h != null && !h.isBlank());
     }
 
     private DadosPeca validar(DadosPeca entrada) {
@@ -140,6 +149,11 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
         var historia = entrada.historia() == null ? List.<String>of() : entrada.historia();
         if (historia.stream().anyMatch(t -> t == null) || String.join("\n", historia).length() > 4000)
             throw ErroPecaException.invalido("historia", "História da peça inválida.");
+        var materiais = entrada.materiais() == null ? List.<String>of()
+                : entrada.materiais().stream().map(m -> m == null ? null : m.strip()).toList();
+        if (materiais.size() > 50 || materiais.stream().anyMatch(m -> m == null || m.isEmpty() || m.length() > 120)
+                || materiais.stream().filter(m -> m != null).distinct().count() != materiais.size())
+            throw ErroPecaException.invalido("materiais", "Informe até 50 materiais válidos, sem repetição e com até 120 caracteres.");
         String situacao = entrada.situacao() == null ? "publicada" : entrada.situacao();
         if (!Set.of("rascunho", "publicada").contains(situacao))
             throw ErroPecaException.invalido("situacao", "Situação da peça inválida.");
@@ -157,7 +171,7 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
                 || (situacao.equals("publicada") && disponibilidade.equals("encomenda") && prazo == null))
             throw ErroPecaException.invalido("prazoProducaoDias", "Informe prazoProducaoDias entre 1 e 120 dias.");
         return new DadosPeca(nome, entrada.tecnica(), entrada.territorio(), entrada.categoria(), entrada.tipo(),
-                historia, preco, disponibilidade, prazo, situacao, entrada.fotos(), null);
+                historia, materiais, preco, disponibilidade, prazo, situacao, entrada.fotos(), null);
     }
 
     private void referencia(String valor, List<String> valores, String campo) {

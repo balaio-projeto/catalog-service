@@ -128,7 +128,7 @@ public class PecasPersistenceAdapter implements ConsultarPecasPort, GerenciarPec
                 peca.categoria(), peca.tipo(), peca.preco(), peca.desconto(), peca.disponibilidade(),
                 peca.prazoProducaoDias(), peca.historia(), peca.imagem(), peca.avaliacao(),
                 peca.totalAvaliacoes(), peca.situacao(), peca.inativadoEm(), peca.ordemCatalogo(),
-                peca.proprietarioId(), peca.criadaEm(), fotos);
+                peca.proprietarioId(), peca.criadaEm(), fotos, peca.materiais(), peca.autentica());
     }
 
     private Sort ordenar(OrdenacaoCatalogo ordenacao) {
