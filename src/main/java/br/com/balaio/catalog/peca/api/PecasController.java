@@ -81,6 +81,14 @@ public class PecasController {
         return new PecaItemResponse(PecaResponse.from(consultarPeca.obter(slug, proprietario(jwt))), null);
     }
 
+    @GetMapping("/{slug}/relacionadas")
+    @Operation(summary = "Listar peças públicas da mesma técnica, excluindo a peça atual")
+    public PecasRelacionadasResponse relacionadas(@PathVariable String slug,
+            @RequestParam(required = false) Integer limite) {
+        var pecas = consultarPeca.relacionadas(slug, limite).stream().map(PecaResponse::from).toList();
+        return new PecasRelacionadasResponse(pecas, null);
+    }
+
     static UUID proprietario(Jwt jwt) {
         return jwt != null && "artesao".equals(jwt.getClaimAsString("papel"))
                 ? UUID.fromString(jwt.getSubject()) : null;

@@ -364,6 +364,55 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
         assertThat(ordens).hasSize(4).doesNotHaveDuplicates();
     }
 
+    @Test
+    void relacionadasRespeitamTecnicaVisibilidadeOrdemELimite() {
+        persistir(peca("atual", "Atual", "100", "0", 1, "publicada"));
+        persistir(peca("segunda", "Segunda", "100", "0", 3, "publicada"));
+        persistir(peca("primeira", "Primeira", "100", "0", 2, "publicada"));
+        persistir(peca("rascunho", "Rascunho", "100", "0", 4, "rascunho"));
+        persistir(peca("inativa", "Inativa", "100", "0", 5, "publicada"));
+        persistir(peca("outra-tecnica", "Outra", "100", "0", 6, "publicada"));
+        transacao().executeWithoutResult(status -> {
+            entityManager.createNativeQuery("UPDATE pecas SET inativado_em = CURRENT_TIMESTAMP WHERE slug = 'inativa'").executeUpdate();
+            entityManager.createNativeQuery("UPDATE pecas SET tecnica = 'Xilogravura' WHERE slug = 'outra-tecnica'").executeUpdate();
+        });
+
+        var resposta = http.getForEntity("/api/v1/pecas/atual/relacionadas", Map.class);
+        assertThat(resposta.getStatusCode().value()).isEqualTo(200);
+        assertThat(resposta.getBody()).containsEntry("erro", null).doesNotContainKey("paginacao");
+        assertThat((List<Map>) resposta.getBody().get("dados"))
+                .extracting(p -> p.get("slug")).containsExactly("primeira", "segunda");
+        for (int limite : List.of(1, -1)) {
+            var limitada = http.getForEntity("/api/v1/pecas/atual/relacionadas?limite=" + limite, Map.class);
+            assertThat((List<Map>) limitada.getBody().get("dados"))
+                    .extracting(p -> p.get("slug")).containsExactly("primeira");
+        }
+        var vazia = http.getForEntity("/api/v1/pecas/outra-tecnica/relacionadas", Map.class);
+        assertThat(vazia.getStatusCode().value()).isEqualTo(200);
+        assertThat((List<?>) vazia.getBody().get("dados")).isEmpty();
+        for (String slug : List.of("inexistente", "rascunho", "inativa")) {
+            var ausente = http.getForEntity("/api/v1/pecas/" + slug + "/relacionadas", Map.class);
+            assertThat(ausente.getStatusCode().value()).isEqualTo(404);
+            assertThat(ausente.getBody()).containsEntry("dados", null);
+            assertThat((Map) ausente.getBody().get("erro")).containsEntry("codigo", "RECURSO_NAO_ENCONTRADO");
+        }
+    }
+
+    @Test
+    void relacionadasUsamLimitePadraoETetoDeCem() {
+        for (int i = 0; i < 103; i++) {
+            persistir(peca("peca-" + i, "Peça " + i, "100", "0", i + 1, "publicada"));
+        }
+        for (String query : List.of("", "?limite=0")) {
+            var resposta = http.getForEntity("/api/v1/pecas/peca-0/relacionadas" + query, Map.class);
+            assertThat((List<?>) resposta.getBody().get("dados")).hasSize(3);
+        }
+        var resposta = http.getForEntity("/api/v1/pecas/peca-0/relacionadas?limite=200", Map.class);
+        assertThat((List<?>) resposta.getBody().get("dados")).hasSize(100);
+        assertThat(http.getForEntity("/api/v1/pecas/peca-0/relacionadas?limite=abc", Map.class)
+                .getStatusCode().value()).isEqualTo(400);
+    }
+
     private List<ResponseEntity<Map>> criarAoMesmoTempo(String jwt, String nomeA, String nomeB) throws Exception {
         var inicio = new CountDownLatch(1);
         try (var executor = Executors.newFixedThreadPool(2)) {

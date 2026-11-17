@@ -15,6 +15,8 @@ public interface GerenciarPecasPort {
     int proximaOrdem();
     Optional<Peca> obter(String slug);
     List<Peca> buscarPorArtesao(String slug, UUID proprietarioId);
+
+    List<Peca> buscarRelacionadas(String slug, String tecnica, int limite);
     Peca salvar(Peca peca, List<FotoGravacao> fotos);
     Optional<ArquivoFoto> arquivo(UUID id);
 

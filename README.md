@@ -94,6 +94,15 @@ No Windows, use .\mvnw.cmd spring-boot:run e .\mvnw.cmd test. Em Linux/macOS, us
 
 V2__seed_pecas_from_fake_api.sql é um snapshot de Frontend/fake-api/seed.json. A Fake API orienta o contrato e os dados demonstrativos; migrações já aplicadas não devem ser editadas. Outros serviços acessam o catálogo pela API, nunca pelo banco deste serviço.
 
+## Peças relacionadas (PI-184)
+
+`GET /api/v1/pecas/{slug}/relacionadas?limite=3` retorna `{ "dados": [...], "erro": null }`, sem paginação.
+Consulta somente peças publicadas e ativas da mesma técnica, exclui o slug atual e ordena por `ordem_catalogo` crescente, preservando a ordem da Fake API. O limite padrão é 3 (inclusive quando enviado 0); valores negativos são limitados a 1 e o máximo é 100. Valor não inteiro retorna 400.
+
+Com poucas similares, retorna somente as disponíveis, inclusive lista vazia com HTTP 200. A Fake API e a página de detalhe atual não preenchem essa lista com outra técnica. Slug inexistente, rascunho ou peça inativada retorna 404 no envelope de erro do catálogo. A consulta usa exclusivamente o banco do catalog-service.
+
+A busca aplica o limite no banco sem contagem de paginação.
+
 ## Ainda pendente em outras histórias
 
 Cadastro completo de ateliê e sincronização dos dados de perfil. As referências atuais são um conjunto estático versionado conforme a Fake API, não um cadastro editável.

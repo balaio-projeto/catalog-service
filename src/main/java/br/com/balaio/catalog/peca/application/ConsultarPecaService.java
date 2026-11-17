@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import br.com.balaio.catalog.peca.application.port.out.GerenciarPecasPort;
 import br.com.balaio.catalog.peca.domain.Peca;
@@ -24,6 +25,14 @@ public class ConsultarPecaService {
 
     public List<Peca> listarPorArtesao(String slug, UUID proprietarioId) {
         return pecas.buscarPorArtesao(slug, proprietarioId);
+    }
+
+    @Transactional(readOnly = true)
+    public List<Peca> relacionadas(String slug, Integer limiteSolicitado) {
+        var peca = obter(slug, null);
+        int limite = limiteSolicitado == null || limiteSolicitado == 0 ? 3
+                : Math.min(100, Math.max(1, limiteSolicitado));
+        return pecas.buscarRelacionadas(slug, peca.tecnica(), limite);
     }
 
     private boolean visivel(Peca peca, UUID proprietarioId) {

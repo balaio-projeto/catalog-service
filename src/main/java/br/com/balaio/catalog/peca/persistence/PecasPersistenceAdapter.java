@@ -73,6 +73,15 @@ public class PecasPersistenceAdapter implements ConsultarPecasPort, GerenciarPec
     }
 
     @Override
+    public List<Peca> buscarRelacionadas(String slug, String tecnica, int limite) {
+        var filtro = PecaSpecifications.catalogo(new FiltroCatalogo(null, tecnica, null, null, null, null, null))
+                .and((root, query, criteria) -> criteria.notEqual(root.get("slug"), slug));
+        var relacionadas = repository.findBy(filtro,
+                consulta -> consulta.sortBy(Sort.by("ordemCatalogo")).limit(limite).all());
+        return relacionadas.stream().map(entity -> comFotos(entity.toDomain())).toList();
+    }
+
+    @Override
     public List<Peca> buscarPorArtesao(String slug, UUID proprietarioId) {
         org.springframework.data.jpa.domain.Specification<PecaJpaEntity> filtro =
                 (root, query, criteria) -> criteria.equal(root.get("artesao"), slug);
