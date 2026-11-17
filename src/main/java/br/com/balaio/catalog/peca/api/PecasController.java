@@ -89,6 +89,12 @@ public class PecasController {
         return new PecasRelacionadasResponse(pecas, null);
     }
 
+    @GetMapping("/{slug}/historico")
+    @Operation(summary = "Consultar dados históricos da peça, inclusive após inativação")
+    public PecaItemResponse historico(@PathVariable String slug) {
+        return new PecaItemResponse(PecaResponse.from(consultarPeca.historico(slug)), null);
+    }
+
     static UUID proprietario(Jwt jwt) {
         return jwt != null && "artesao".equals(jwt.getClaimAsString("papel"))
                 ? UUID.fromString(jwt.getSubject()) : null;

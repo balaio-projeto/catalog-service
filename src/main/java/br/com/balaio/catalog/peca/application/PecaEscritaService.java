@@ -22,7 +22,7 @@ import br.com.balaio.catalog.peca.application.port.in.CriarPecaUseCase;
 import br.com.balaio.catalog.peca.application.port.in.AtualizarPecaUseCase;
 import br.com.balaio.catalog.peca.domain.FotoPeca;
 import br.com.balaio.catalog.peca.domain.Peca;
-import br.com.balaio.catalog.peca.domain.ReferenciasCatalogo;
+import br.com.balaio.catalog.peca.application.port.out.ConsultarReferenciasPort;
 
 @Service
 public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCase {
@@ -30,10 +30,13 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
     private static final Pattern URL_FOTO = Pattern.compile("^/api/v1/arquivos/pecas/[0-9a-f-]{36}\\.(jpg|png|webp)$");
     private final GerenciarPecasPort pecas;
     private final ResolverArtesaoPort artesaos;
+    private final ConsultarReferenciasPort referencias;
 
-    public PecaEscritaService(GerenciarPecasPort pecas, ResolverArtesaoPort artesaos) {
+    public PecaEscritaService(GerenciarPecasPort pecas, ResolverArtesaoPort artesaos,
+            ConsultarReferenciasPort referencias) {
         this.pecas = pecas;
         this.artesaos = artesaos;
+        this.referencias = referencias;
     }
 
     @Transactional
@@ -142,10 +145,11 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
         if (entrada == null) throw ErroPecaException.invalido(null, "Dados da peça inválidos.");
         String nome = entrada.nome() == null ? "" : entrada.nome().strip();
         if (nome.isEmpty() || nome.length() > 120) throw ErroPecaException.invalido("nome", "Informe um nome de até 120 caracteres.");
-        referencia(entrada.tecnica(), ReferenciasCatalogo.TECNICAS, "tecnica");
-        referencia(entrada.territorio(), ReferenciasCatalogo.TERRITORIOS, "territorio");
-        referencia(entrada.categoria(), ReferenciasCatalogo.CATEGORIAS, "categoria");
-        referencia(entrada.tipo(), ReferenciasCatalogo.TIPOS, "tipo");
+        var valores = referencias.consultar();
+        referencia(entrada.tecnica(), valores.tecnicas(), "tecnica");
+        referencia(entrada.territorio(), valores.territorios(), "territorio");
+        referencia(entrada.categoria(), valores.categorias(), "categoria");
+        referencia(entrada.tipo(), valores.tipos(), "tipo");
         var historia = entrada.historia() == null ? List.<String>of() : entrada.historia();
         if (historia.stream().anyMatch(t -> t == null) || String.join("\n", historia).length() > 4000)
             throw ErroPecaException.invalido("historia", "História da peça inválida.");

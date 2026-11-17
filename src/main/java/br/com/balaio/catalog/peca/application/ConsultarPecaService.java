@@ -28,6 +28,13 @@ public class ConsultarPecaService {
     }
 
     @Transactional(readOnly = true)
+    public Peca historico(String slug) {
+        return pecas.obter(slug).filter(peca -> "publicada".equals(peca.situacao()))
+                .orElseThrow(() -> new ErroPecaException(404, "RECURSO_NAO_ENCONTRADO", null,
+                        "Peça não encontrada."));
+    }
+
+    @Transactional(readOnly = true)
     public List<Peca> relacionadas(String slug, Integer limiteSolicitado) {
         var peca = obter(slug, null);
         int limite = limiteSolicitado == null || limiteSolicitado == 0 ? 3

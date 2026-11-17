@@ -105,4 +105,13 @@ A busca aplica o limite no banco sem contagem de paginação.
 
 ## Ainda pendente em outras histórias
 
-Cadastro completo de ateliê e sincronização dos dados de perfil. As referências atuais são um conjunto estático versionado conforme a Fake API, não um cadastro editável.
+Cadastro completo de ateliê e sincronização dos dados de perfil.
+
+## Referências e histórico (PI-215)
+
+`GET /api/v1/referencias` retorna `{ dados: { tecnicas, territorios, categorias, tipos, etiquetas }, erro: null }`.
+Os valores curados vêm da tabela `referencias_catalogo`, ordenados pelo campo `ordem` de cada grupo; grupos vazios retornam listas vazias. A migration V8 preserva os valores e a ordem anteriormente usados pela API. Novas opções são cadastradas por migrations de curadoria no catálogo, e passam a ser consultadas e aceitas na escrita sem alteração de listas Java ou cache. Cadastrar uma peça não cria uma opção arbitrária nem remove referências sem peças associadas.
+
+`GET /api/v1/pecas/{slug}/historico` retorna o mesmo objeto e envelope do detalhe, preservando a ordem de `historia`, inclusive para peças inativadas. Conforme decisão de contrato PI-215, mantém o comportamento consumido pelas telas de pedidos e pela Fake API; retorna 404 para slug inexistente ou rascunho. Este endpoint consulta os dados atuais persistidos e não um log de versões. A decisão está registrada em `Frontend/docs/api.md`.
+
+Os adaptadores existentes do frontend já consomem esses caminhos e formatos e o gateway já os encaminha ao catálogo. A validação ponta a ponta das telas com o ambiente real depende de execução integrada; os testes deste serviço validam os contratos HTTP e a persistência localmente.
