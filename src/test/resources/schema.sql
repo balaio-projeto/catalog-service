@@ -48,6 +48,7 @@ INSERT INTO peca_criacao_lock (id) VALUES (1);
 
 CREATE TABLE reservas_peca (
     id UUID PRIMARY KEY,
+    pedido_id VARCHAR(160),
     slug VARCHAR(160) NOT NULL REFERENCES pecas(slug),
     estado VARCHAR(32) NOT NULL,
     expira_em TIMESTAMP WITH TIME ZONE NOT NULL

@@ -4,17 +4,22 @@ import java.util.List;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import br.com.balaio.catalog.peca.application.port.out.GerenciarPecasPort;
+import br.com.balaio.catalog.peca.application.port.out.ConsultarReservasDoArtesaoPort;
 import br.com.balaio.catalog.peca.domain.Peca;
+import br.com.balaio.catalog.peca.domain.PecaPainel;
 
 @Service
 public class ConsultarPecaService {
     private final GerenciarPecasPort pecas;
+    private final ConsultarReservasDoArtesaoPort reservas;
 
-    public ConsultarPecaService(GerenciarPecasPort pecas) {
+    public ConsultarPecaService(GerenciarPecasPort pecas, ConsultarReservasDoArtesaoPort reservas) {
         this.pecas = pecas;
+        this.reservas = reservas;
     }
 
     public Peca obter(String slug, UUID proprietarioId) {
@@ -25,6 +30,15 @@ public class ConsultarPecaService {
 
     public List<Peca> listarPorArtesao(String slug, UUID proprietarioId) {
         return pecas.buscarPorArtesao(slug, proprietarioId);
+    }
+
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public List<PecaPainel> listarPainel(String slug, UUID proprietarioId) {
+        if (proprietarioId == null || !slug.equals("artesao-" + proprietarioId))
+            throw new ErroPecaException(403, "SEM_PERMISSAO", null, "Painel disponível apenas ao proprietário.");
+        var pecasDoDono = pecas.buscarPorArtesao(slug, proprietarioId);
+        var reservasDoDono = reservas.consultar(proprietarioId);
+        return pecasDoDono.stream().map(peca -> new PecaPainel(peca, reservasDoDono.get(peca.slug()))).toList();
     }
 
     @Transactional(readOnly = true)

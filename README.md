@@ -103,6 +103,14 @@ Com poucas similares, retorna somente as disponíveis, inclusive lista vazia com
 
 A busca aplica o limite no banco sem contagem de paginação.
 
+## Disponibilidade e painel de peças (PI-196)
+
+A mudança de condição usa o PATCH existente, identificado pelo proprietário persistido e pelo JWT, sem chamar o profile-service. Publicação `encomenda` exige prazo inteiro de 1 a 120 dias; a exceção de rascunho sem prazo é preservada. O mesmo bloqueio de linha serializa edição, reserva e liberação. Edição é recusada enquanto houver inativação ou reserva RESERVADA/CONSUMIDA, inclusive alteração de preço, disponibilidade ou situação.
+
+Na rota existente `GET /api/v1/artesaos/{slug}/pecas`, apenas o proprietário com slug `artesao-<sub>` recebe as peças do painel com `estadoVenda`: disponivel, rascunho, inativada, reservada ou vendida. `inativadoEm` é retornado no objeto da peça; `vendidaEmPedido` aparece apenas na lista do dono quando a reserva está CONSUMIDA. A condição `disponibilidade` continua sendo disponivel/encomenda/unica e não é sobrescrita para representar venda. Liberação/expiração usam o estado persistido pelo fluxo de reservas existente; não há reativação antecipada pela leitura.
+
+O painel consulta as reservas do proprietário em lote e lê peças e reservas em transação REPEATABLE_READ, evitando estados de instantes distintos. Público e outros artesãos continuam com a listagem pública, sem os dados privados da reserva. Nenhuma rota, resumo de métricas ou integração da PI-247 foi adicionada. Não é necessária migration de produção: os dados já existem em pecas e reservas_peca.
+
 ## Ainda pendente em outras histórias
 
 Cadastro completo de ateliê e sincronização dos dados de perfil.

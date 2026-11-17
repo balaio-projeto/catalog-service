@@ -48,7 +48,7 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
         String slug = jdbc.query("SELECT slug FROM pecas WHERE disponibilidade = 'unica' AND situacao = 'publicada' AND inativado_em IS NULL LIMIT 1",
                 (rs, row) -> rs.getString(1)).getFirst();
         UUID dono = UUID.randomUUID();
-        jdbc.update("UPDATE pecas SET proprietario_id = ? WHERE slug = ?", dono, slug);
+        jdbc.update("UPDATE pecas SET proprietario_id = ?, artesao = ? WHERE slug = ?", dono, "artesao-" + dono, slug);
         var cotacaoHeaders = new HttpHeaders();
         cotacaoHeaders.add("X-Balaio-Service-Token", "0123456789abcdef0123456789abcdef");
         var cotacao = http.exchange("/internal/v1/pecas/" + slug + "/cotacao", HttpMethod.GET,
@@ -69,6 +69,8 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
             var vencedora = primeira.status() == 201 ? primeira : segunda;
             String pedido = primeira.status() == 201 ? "pedido-a" : "pedido-b";
             UUID id = UUID.fromString((String) vencedora.dados().get("id"));
+            assertThat(consultarPainel(dono, slug)).containsEntry("estadoVenda", "reservada")
+                    .doesNotContainKey("vendidaEmPedido");
             assertThat(criar(pedido, slug).dados().get("id")).isEqualTo(id.toString());
             String outroSlug = jdbc.query("SELECT slug FROM pecas WHERE slug <> ? AND disponibilidade = 'unica' AND situacao = 'publicada' AND inativado_em IS NULL LIMIT 1",
                     (rs, row) -> rs.getString(1), slug).getFirst();
@@ -82,7 +84,7 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
             var editarHeaders = new HttpHeaders();
             editarHeaders.setBearerAuth(token(dono, "artesao"));
             var editar = http.exchange("/api/v1/pecas/" + slug, HttpMethod.PATCH,
-                    new HttpEntity<>(Map.of("preco", 1), editarHeaders), Map.class);
+                    new HttpEntity<>(Map.of("disponibilidade", "encomenda", "prazoProducaoDias", 10), editarHeaders), Map.class);
             assertThat(editar.getStatusCode().value()).isEqualTo(409);
             var excluir = http.exchange("/api/v1/pecas/" + slug, HttpMethod.DELETE,
                     new HttpEntity<>(editarHeaders), Map.class);
@@ -90,6 +92,8 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
 
             assertThat(liberar(id, pedido).status()).isEqualTo(200);
             assertThat(liberar(id, pedido).status()).isEqualTo(200);
+            assertThat(consultarPainel(dono, slug)).containsEntry("estadoVenda", "disponivel")
+                    .doesNotContainKey("vendidaEmPedido");
             assertThat(jdbc.queryForObject("SELECT inativado_em IS NULL FROM pecas WHERE slug = ?", Boolean.class, slug)).isTrue();
             jdbc.update("UPDATE pecas SET preco = preco + 1 WHERE slug = ?", slug);
             assertThat(liberar(id, pedido).dados().get("preco")).isEqualTo(vencedora.dados().get("preco"));
@@ -102,6 +106,15 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
             UUID novoId = UUID.fromString((String) posterior.dados().get("id"));
             assertThat(confirmar(novoId, "pedido-posterior").dados().get("estado")).isEqualTo("CONSUMIDA");
             assertThat(confirmar(novoId, "pedido-posterior").dados().get("estado")).isEqualTo("CONSUMIDA");
+            assertThat(consultarPainel(dono, slug)).containsEntry("estadoVenda", "vendida")
+                    .containsEntry("vendidaEmPedido", "pedido-posterior");
+            assertThat(http.exchange("/api/v1/pecas/" + slug, HttpMethod.PATCH,
+                    new HttpEntity<>(Map.of("disponibilidade", "disponivel"), editarHeaders), Map.class)
+                    .getStatusCode().value()).isEqualTo(409);
+            var alheios = new HttpHeaders();
+            alheios.setBearerAuth(token(UUID.randomUUID(), "artesao"));
+            assertThat((java.util.List<?>) http.exchange("/api/v1/artesaos/artesao-" + dono + "/pecas", HttpMethod.GET,
+                    new HttpEntity<>(alheios), Map.class).getBody().get("dados")).isEmpty();
             assertThat(http.exchange("/api/v1/pecas/" + slug, HttpMethod.DELETE,
                     new HttpEntity<>(editarHeaders), Map.class).getStatusCode().value()).isEqualTo(409);
             jdbc.update("UPDATE reservas_peca SET expira_em = now() - interval '1 second' WHERE id = ?", novoId);
@@ -115,6 +128,8 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
             jdbc.update("UPDATE reservas_peca SET expira_em = now() - interval '1 second' WHERE id = ?", expiravelId);
             reservas.expirar();
             assertThat(jdbc.queryForObject("SELECT estado FROM reservas_peca WHERE id = ?", String.class, expiravelId)).isEqualTo("EXPIRADA");
+            assertThat(consultarPainel(dono, slug)).containsEntry("estadoVenda", "disponivel")
+                    .doesNotContainKey("vendidaEmPedido");
             assertThat(jdbc.queryForObject("SELECT inativado_em IS NULL FROM pecas WHERE slug = ?", Boolean.class, slug)).isTrue();
             assertThat(criar("pedido-apos-expiracao", slug).status()).isEqualTo(201);
             assertThat(confirmar(expiravelId, "pedido-expiravel").status()).isEqualTo(409);
@@ -141,6 +156,48 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
         assertThat(jdbc.queryForObject("SELECT inativado_em IS NOT NULL FROM pecas WHERE slug = ?",
                 Boolean.class, slug)).isTrue();
         assertThat(criar("outro-" + pedido, slug).status()).isEqualTo(409);
+    }
+
+    @Test
+    void alterarDisponibilidadeEReservarAoMesmoTempoNaoProduzEstadoConflitante() throws Exception {
+        String slug = jdbc.query("SELECT slug FROM pecas WHERE disponibilidade = 'unica' AND situacao = 'publicada' AND inativado_em IS NULL LIMIT 1",
+                (rs, row) -> rs.getString(1)).getFirst();
+        UUID dono = UUID.randomUUID();
+        jdbc.update("UPDATE pecas SET proprietario_id = ?, artesao = ? WHERE slug = ?", dono, "artesao-" + dono, slug);
+        var headers = new HttpHeaders();
+        headers.setBearerAuth(token(dono, "artesao"));
+        var inicio = new CountDownLatch(1);
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var reserva = executor.submit(() -> { inicio.await(); return criar("disputa-" + UUID.randomUUID(), slug); });
+            var edicao = executor.submit(() -> {
+                inicio.await();
+                return http.exchange("/api/v1/pecas/" + slug, HttpMethod.PATCH,
+                        new HttpEntity<>(Map.of("disponibilidade", "encomenda", "prazoProducaoDias", 10), headers), Map.class);
+            });
+            inicio.countDown();
+            var reservada = reserva.get(30, TimeUnit.SECONDS);
+            var editada = edicao.get(30, TimeUnit.SECONDS);
+            if (reservada.status() == 201) {
+                assertThat(editada.getStatusCode().value()).isEqualTo(409);
+                assertThat(consultarPainel(dono, slug)).containsEntry("disponibilidade", "unica")
+                        .containsEntry("estadoVenda", "reservada");
+            } else {
+                assertThat(reservada.status()).isEqualTo(409);
+                assertThat(editada.getStatusCode().value()).isEqualTo(200);
+                assertThat(consultarPainel(dono, slug)).containsEntry("disponibilidade", "encomenda")
+                        .containsEntry("prazoProducaoDias", 10).containsEntry("estadoVenda", "disponivel");
+            }
+        }
+    }
+
+    private Map consultarPainel(UUID dono, String slug) {
+        var headers = new HttpHeaders();
+        headers.setBearerAuth(token(dono, "artesao"));
+        var resposta = http.exchange("/api/v1/artesaos/artesao-" + dono + "/pecas", HttpMethod.GET,
+                new HttpEntity<>(headers), Map.class);
+        assertThat(resposta.getStatusCode().value()).isEqualTo(200);
+        return ((java.util.List<Map>) resposta.getBody().get("dados")).stream()
+                .filter(peca -> slug.equals(peca.get("slug"))).findFirst().orElseThrow();
     }
 
     private Resultado criar(String pedido, String slug) {

@@ -63,7 +63,7 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
         pecas.bloquearPeca(slug);
         var atual = pecas.obter(slug).orElseThrow(this::naoEncontrado);
         exigirProprietario(atual, contaId);
-        if (atual.inativadoEm() != null)
+        if (atual.inativadoEm() != null || pecas.possuiReservaAtiva(slug))
             throw new ErroPecaException(409, "PECA_INDISPONIVEL", null, "Peça indisponível para edição.");
         if (alteracoes == null)
             alteracoes = new DadosPeca(null, null, null, null, null, null, null, null, null, null, null, null, null);
