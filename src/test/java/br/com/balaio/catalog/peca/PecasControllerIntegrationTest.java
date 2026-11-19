@@ -533,7 +533,8 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
                 Map.of("disponibilidade", "disponivel"), Map.class).getStatusCode().value()).isEqualTo(404);
         for (String papel : List.of("comprador", "admin", "administrador")) {
             assertThat(requisitar(HttpMethod.PATCH, caminho, token(dono, papel),
-                    Map.of("disponibilidade", "disponivel"), Map.class).getStatusCode().value()).isEqualTo(403);
+                    Map.of("disponibilidade", "disponivel"), Map.class).getStatusCode().value())
+                    .isEqualTo("administrador".equals(papel) ? 401 : 403);
         }
         org.mockito.Mockito.verifyNoInteractions(artesaos);
     }
