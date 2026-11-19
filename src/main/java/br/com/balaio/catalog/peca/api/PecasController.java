@@ -66,7 +66,7 @@ public class PecasController {
     }
 
     private UUID exigirModificador(Jwt jwt) {
-        if (jwt == null || !java.util.Set.of("artesao", "administrador", "admin").contains(jwt.getClaimAsString("papel")))
+        if (jwt == null || !java.util.Set.of("artesao", "admin").contains(jwt.getClaimAsString("papel")))
             throw new ErroPecaException(403, "SEM_PERMISSAO", null, "Operação permitida apenas ao proprietário ou administrador.");
         return UUID.fromString(jwt.getSubject());
     }
