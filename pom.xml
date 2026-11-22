@@ -67,6 +67,16 @@
 			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
 			<version>3.1.1</version>
 		</dependency>
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>s3</artifactId>
+			<version>2.59.3</version>
+		</dependency>
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>apache5-client</artifactId>
+			<version>2.59.3</version>
+		</dependency>
 
 		<dependency>
 			<groupId>org.postgresql</groupId>

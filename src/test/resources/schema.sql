@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS limpeza_fotos_storage;
 DROP TABLE IF EXISTS referencias_catalogo;
 DROP TABLE IF EXISTS reservas_peca;
 DROP TABLE IF EXISTS peca_fotos;
@@ -39,8 +40,15 @@ CREATE TABLE peca_fotos (
     ordem INTEGER NOT NULL,
     formato VARCHAR(16),
     conteudo BYTEA,
+    storage_key VARCHAR(500),
+    CHECK (storage_key IS NULL OR conteudo IS NULL),
     UNIQUE (peca_slug, foto_id),
     UNIQUE (peca_slug, ordem)
+);
+
+CREATE TABLE limpeza_fotos_storage (
+    storage_key VARCHAR(500) PRIMARY KEY,
+    criada_em TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE peca_criacao_lock (id INTEGER PRIMARY KEY CHECK (id = 1));

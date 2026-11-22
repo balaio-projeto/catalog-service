@@ -2,29 +2,39 @@ package br.com.balaio.catalog.peca.persistence;
 
 import java.util.List;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Repository;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import br.com.balaio.catalog.peca.application.FiltroCatalogo;
+import br.com.balaio.catalog.peca.application.FotoStorageIndisponivelException;
 import br.com.balaio.catalog.peca.application.OrdenacaoCatalogo;
 import br.com.balaio.catalog.peca.application.port.out.ConsultarPecasPort;
+import br.com.balaio.catalog.peca.application.port.out.FotoStoragePort;
 import br.com.balaio.catalog.peca.application.port.out.GerenciarPecasPort;
 import br.com.balaio.catalog.peca.domain.Peca;
 import br.com.balaio.catalog.peca.domain.FotoPeca;
 
 @Repository
 public class PecasPersistenceAdapter implements ConsultarPecasPort, GerenciarPecasPort {
+    private static final String PREFIXO_URL_FOTO = "/api/v1/arquivos/pecas/";
     private final SpringDataPecaRepository repository;
     private final JdbcTemplate jdbc;
+    private final ObjectProvider<FotoStoragePort> storageProvider;
+    private final LimpezaFotosStorage limpeza;
 
-    public PecasPersistenceAdapter(SpringDataPecaRepository repository, JdbcTemplate jdbc) {
+    public PecasPersistenceAdapter(SpringDataPecaRepository repository, JdbcTemplate jdbc,
+            ObjectProvider<FotoStoragePort> storageProvider, LimpezaFotosStorage limpeza) {
         this.repository = repository;
         this.jdbc = jdbc;
+        this.storageProvider = storageProvider;
+        this.limpeza = limpeza;
     }
 
     @Override
@@ -100,24 +110,48 @@ public class PecasPersistenceAdapter implements ConsultarPecasPort, GerenciarPec
     public Peca salvar(Peca peca, List<FotoGravacao> fotos) {
         repository.saveAndFlush(PecaJpaEntity.fromDomain(peca));
         if (fotos != null) {
-            var completas = new ArrayList<FotoGravacao>();
+            var storage = storageProvider.getIfAvailable();
+            var antigas = jdbc.query("SELECT storage_key FROM peca_fotos WHERE peca_slug = ? AND storage_key IS NOT NULL",
+                    (rs, row) -> rs.getString(1), peca.slug());
+            var manter = new HashSet<String>();
+            var completas = new ArrayList<FotoPersistida>();
             for (var foto : fotos) {
+                UUID id = idDaUrl(foto.foto().url());
+                String chave = null;
+                String formato = foto.formato();
+                byte[] legado = null;
                 if (foto.conteudo() != null) {
-                    completas.add(foto);
+                    if (storage == null) {
+                        throw new FotoStorageIndisponivelException();
+                    }
+                    chave = chaveStorage(peca.slug(), id, formato);
+                    limpeza.limparSeRollback(chave);
+                    storage.guardar(chave, formato, foto.conteudo());
                 } else {
-                    var id = UUID.fromString(foto.foto().url().substring("/api/v1/arquivos/pecas/".length(),
-                            foto.foto().url().lastIndexOf('.')));
-                    var atual = arquivo(id).orElseThrow();
-                    completas.add(new FotoGravacao(foto.foto(), atual.formato(), atual.conteudo()));
+                    var atual = jdbc.query("SELECT formato, conteudo, storage_key FROM peca_fotos WHERE id = ?",
+                            (rs, row) -> new FotoPersistida(foto, rs.getString("formato"), rs.getBytes("conteudo"),
+                                    rs.getString("storage_key")), id).stream().findFirst()
+                            .orElseThrow(() -> new IllegalStateException("Foto existente não encontrada."));
+                    formato = atual.formato();
+                    chave = atual.storageKey();
+                    legado = atual.conteudo();
+                    if (chave == null && storage != null && legado != null) {
+                        chave = chaveStorage(peca.slug(), id, formato);
+                        limpeza.limparSeRollback(chave);
+                        storage.guardar(chave, formato, legado);
+                        legado = null;
+                    }
                 }
+                if (chave != null) manter.add(chave);
+                completas.add(new FotoPersistida(foto, formato, legado, chave));
             }
+            antigas.stream().filter(chave -> !manter.contains(chave)).forEach(limpeza::agendar);
             jdbc.update("DELETE FROM peca_fotos WHERE peca_slug = ?", peca.slug());
-            for (var foto : completas) {
-                var id = UUID.fromString(foto.foto().url().substring("/api/v1/arquivos/pecas/".length(),
-                        foto.foto().url().lastIndexOf('.')));
-                jdbc.update("INSERT INTO peca_fotos (id, peca_slug, foto_id, nome, url, ordem, formato, conteudo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        id, peca.slug(), foto.foto().id(), foto.foto().nome(), foto.foto().url(),
-                        foto.foto().ordem(), foto.formato(), foto.conteudo());
+            for (var persistida : completas) {
+                var foto = persistida.gravacao().foto();
+                jdbc.update("INSERT INTO peca_fotos (id, peca_slug, foto_id, nome, url, ordem, formato, conteudo, storage_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        idDaUrl(foto.url()), peca.slug(), foto.id(), foto.nome(), foto.url(), foto.ordem(),
+                        persistida.formato(), persistida.conteudo(), persistida.storageKey());
             }
         }
         return obter(peca.slug()).orElseThrow();
@@ -125,9 +159,34 @@ public class PecasPersistenceAdapter implements ConsultarPecasPort, GerenciarPec
 
     @Override
     public Optional<ArquivoFoto> arquivo(UUID id) {
-        return jdbc.query("SELECT formato, conteudo FROM peca_fotos WHERE id = ?",
-                (rs, row) -> new ArquivoFoto(rs.getString(1), rs.getBytes(2)), id).stream().findFirst();
+        var arquivo = jdbc.query("SELECT formato, conteudo, storage_key FROM peca_fotos WHERE id = ?",
+                (rs, row) -> new FotoArmazenada(rs.getString("formato"), rs.getBytes("conteudo"),
+                        rs.getString("storage_key")), id).stream().findFirst();
+        if (arquivo.isEmpty()) return Optional.empty();
+        var persistido = arquivo.get();
+        if (persistido.storageKey() != null) {
+            var storage = storageProvider.getIfAvailable();
+            if (storage == null) throw new FotoStorageIndisponivelException();
+            return storage.obter(persistido.storageKey()).map(bytes -> new ArquivoFoto(persistido.formato(), bytes));
+        }
+        return persistido.conteudo() == null ? Optional.empty()
+                : Optional.of(new ArquivoFoto(persistido.formato(), persistido.conteudo()));
     }
+
+    private UUID idDaUrl(String url) {
+        int inicio = PREFIXO_URL_FOTO.length();
+        int ponto = url.lastIndexOf('.');
+        return UUID.fromString(url.substring(inicio, ponto));
+    }
+
+    private String chaveStorage(String slug, UUID id, String formato) {
+        String extensao = "jpeg".equals(formato) ? "jpg" : formato;
+        return "catalog/" + slug + "/" + id + "." + extensao;
+    }
+
+    private record FotoPersistida(FotoGravacao gravacao, String formato, byte[] conteudo, String storageKey) {}
+
+    private record FotoArmazenada(String formato, byte[] conteudo, String storageKey) {}
 
     private Peca comFotos(Peca peca) {
         var fotos = jdbc.query("SELECT foto_id, nome, url, ordem FROM peca_fotos WHERE peca_slug = ? ORDER BY ordem",

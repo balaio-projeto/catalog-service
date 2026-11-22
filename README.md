@@ -126,6 +126,9 @@ Requer JDK 25, PostgreSQL e o banco balaio_catalog criado antes da primeira inic
 | JWT_PUBLIC_KEY_LOCATION | caminho `file:` para chave pública RSA PEM correspondente à chave privada do profile-service (obrigatório) |
 | JWT_ISSUER / JWT_AUDIENCE | mesmos valores configurados no profile-service (obrigatórios) |
 | PROFILE_SERVICE_URL | http://localhost:8082 |
+| CATALOG_S3_ENABLED | `false`; defina `true` para habilitar fotos em storage S3 compatível |
+| CATALOG_S3_ENDPOINT / CATALOG_S3_REGION / CATALOG_S3_BUCKET | `http://localhost:8333` / `us-east-1` / `balaio-media` |
+| CATALOG_S3_ACCESS_KEY_ID / CATALOG_S3_SECRET_ACCESS_KEY | Credenciais externas de identidade própria do catálogo; não use a identidade administrativa do SeaweedFS |
 
 No Windows, use .\mvnw.cmd spring-boot:run e .\mvnw.cmd test. Em Linux/macOS, use ./mvnw spring-boot:run e ./mvnw test.
 
@@ -165,6 +168,16 @@ O frontend ainda precisa migrar para a rota privada. Nenhum resumo de métricas 
 ## Ainda pendente em outras histórias
 
 Cadastro completo de ateliê e sincronização dos dados de perfil.
+
+## Fotos de peças (PI-175)
+
+Contrato, execução e evidências estão em [docs/PI-175-fotos.md](docs/PI-175-fotos.md).
+As migrations V10/V11 externalizam os novos binários e criam a fila persistente
+de limpeza; falhas S3 retornam 503 no envelope padrão e as exclusões têm retry.
+
+O cadastro e a edição recebem `fotos` no contrato JSON existente. Para uma foto nova, `url` contém uma data URI `data:image/(jpeg|png|webp);base64,...`; o catálogo valida assinatura e tamanho (até 5 MiB), guarda o binário no bucket privado `balaio-media` sob `catalog/` e persiste no PostgreSQL apenas metadados e `storage_key`. Fotos existentes podem ser mantidas e a ordem enviada é persistida. `GET /api/v1/arquivos/pecas/{uuid}.{jpg|png|webp}` entrega a imagem através do catalog-service/gateway; não há acesso direto do navegador ao storage.
+
+No Compose, habilite `CATALOG_S3_ENABLED=true` e forneça `CATALOG_S3_ACCESS_KEY_ID` / `CATALOG_S3_SECRET_ACCESS_KEY` fora do repositório. A identidade `balaio-catalog`, provisionada por `platform/scripts/prepare-catalog-storage.ps1 -Enable`, tem somente `Read`/`Write` no recurso `balaio-media/catalog/*`, incluindo exclusão e sem acesso aos demais prefixos. O provisionamento e os testes de isolamento estão em `platform/docs/storage-local.md`. Não reutilize `balaio-local-admin`. O padrão desabilitado mantém a inicialização local sem storage e sem afetar URLs de fotos dos dados demonstrativos. A coluna `conteudo` permanece somente para leitura/migração de fotos legadas; ao salvar uma peça com foto legada, ela é migrada para o storage configurado.
 
 ## Referências e histórico (PI-215)
 

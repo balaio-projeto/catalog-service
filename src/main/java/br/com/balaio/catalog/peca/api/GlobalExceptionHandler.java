@@ -9,11 +9,18 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import br.com.balaio.catalog.peca.application.ErroPecaException;
+import br.com.balaio.catalog.peca.application.FotoStorageIndisponivelException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DataAccessException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    @ExceptionHandler(FotoStorageIndisponivelException.class)
+    public ResponseEntity<ApiErrorResponse> tratarStorageIndisponivel() {
+        return criarResposta(HttpStatus.SERVICE_UNAVAILABLE, "STORAGE_INDISPONIVEL",
+                "Não foi possível acessar o armazenamento de fotos. Tente novamente.");
+    }
+
     @ExceptionHandler(ErroPecaException.class)
     public ResponseEntity<ApiErrorResponse> tratarRegra(ErroPecaException exception) {
         return ResponseEntity.status(exception.status()).body(new ApiErrorResponse(null,
