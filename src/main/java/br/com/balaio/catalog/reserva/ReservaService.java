@@ -57,16 +57,14 @@ public class ReservaService {
                         rs.getString("disponibilidade"), rs.getString("situacao"),
                         rs.getObject("inativado_em", OffsetDateTime.class)), comando.slug()).stream().findFirst()
                 .orElseThrow(() -> erro(404, "RECURSO_NAO_ENCONTRADO", "Peça não encontrada."));
-        if (!"unica".equals(peca.disponibilidade()))
-            throw erro(409, "RESERVA_NAO_APLICAVEL", "Esta peça não usa reserva exclusiva.");
         boolean expirou = expirarDaPeca(peca.slug());
         var anterior = buscarPorPedido(comando.pedidoId(), comando.slug());
         if (anterior != null) {
-            if (anterior.chave().equals(comando.chave())
-                    && ("RESERVADA".equals(anterior.estado()) || "CONSUMIDA".equals(anterior.estado())))
-                return resposta(anterior);
-            throw erro(409, "RESERVA_CONFLITANTE", "Reserva anterior incompatível ou expirada.");
+            if (anterior.chave().equals(comando.chave())) return resposta(anterior);
+            throw erro(409, "RESERVA_CONFLITANTE", "Reserva anterior incompatível.");
         }
+        if (!"unica".equals(peca.disponibilidade()))
+            throw erro(409, "RESERVA_NAO_APLICAVEL", "Esta peça não usa reserva exclusiva.");
         if (!"publicada".equals(peca.situacao()) || (peca.inativadoEm() != null && !expirou))
             throw erro(409, "PECA_INDISPONIVEL", "Peça indisponível.");
         var id = UUID.randomUUID();
@@ -91,7 +89,9 @@ public class ReservaService {
             throw erro(409, "RESERVA_CONFLITANTE", "Pedido ou chave de liberação incompatível.");
         if ("RESERVADA".equals(reserva.estado()) || "CONSUMIDA".equals(reserva.estado())) {
             jdbc.update("UPDATE reservas_peca SET estado = 'LIBERADA' WHERE id = ?", id);
-            jdbc.update("UPDATE pecas SET inativado_em = NULL WHERE slug = ?", slug);
+            jdbc.update("UPDATE pecas SET inativado_em = NULL WHERE slug = ? AND situacao = 'publicada' "
+                    + "AND NOT EXISTS (SELECT 1 FROM reservas_peca WHERE slug = ? AND id <> ? "
+                    + "AND estado IN ('RESERVADA', 'CONSUMIDA'))", slug, slug, id);
             reserva = new Linha(reserva.id(), reserva.pedidoId(), reserva.slug(), reserva.preco(), reserva.artesao(),
                     reserva.proprietarioId(), reserva.chave(), "LIBERADA", reserva.expiraEm());
         }

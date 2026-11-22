@@ -81,6 +81,8 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
             assertThat(mesmaChave.erro().get("codigo")).isEqualTo("RESERVA_CONFLITANTE");
             assertThat(jdbc.queryForObject("SELECT count(*) FROM reservas_peca WHERE pedido_id = 'pedido-intruso'", Integer.class)).isZero();
             assertThat(liberar(id, "outro-pedido").status()).isEqualTo(409);
+            assertThat(trocar("/internal/v1/reservas/" + id + "/liberar",
+                    Map.of("pedidoId", pedido, "chave", "outra-chave")).status()).isEqualTo(409);
             assertThat(jdbc.queryForObject("SELECT inativado_em IS NOT NULL FROM pecas WHERE slug = ?", Boolean.class, slug)).isTrue();
             var editarHeaders = new HttpHeaders();
             editarHeaders.setBearerAuth(token(dono, "artesao"));
@@ -93,6 +95,7 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
 
             assertThat(liberar(id, pedido).status()).isEqualTo(200);
             assertThat(liberar(id, pedido).status()).isEqualTo(200);
+            assertThat(criar(pedido, slug).dados().get("estado")).isEqualTo("LIBERADA");
             assertThat(consultarPainel(dono, slug)).containsEntry("estadoVenda", "disponivel")
                     .doesNotContainKey("vendidaEmPedido");
             assertThat(jdbc.queryForObject("SELECT inativado_em IS NULL FROM pecas WHERE slug = ?", Boolean.class, slug)).isTrue();
@@ -114,8 +117,8 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
                     .getStatusCode().value()).isEqualTo(409);
             var alheios = new HttpHeaders();
             alheios.setBearerAuth(token(UUID.randomUUID(), "artesao"));
-            assertThat((java.util.List<?>) http.exchange("/api/v1/artesaos/artesao-" + dono + "/pecas", HttpMethod.GET,
-                    new HttpEntity<>(alheios), Map.class).getBody().get("dados")).isEmpty();
+            assertThat(http.exchange("/api/v1/artesaos/artesao-" + dono + "/pecas/painel", HttpMethod.GET,
+                    new HttpEntity<>(alheios), Map.class).getStatusCode().value()).isEqualTo(403);
             assertThat(http.exchange("/api/v1/pecas/" + slug, HttpMethod.DELETE,
                     new HttpEntity<>(editarHeaders), Map.class).getStatusCode().value()).isEqualTo(409);
             jdbc.update("UPDATE reservas_peca SET expira_em = now() - interval '1 second' WHERE id = ?", novoId);
@@ -135,7 +138,40 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
             assertThat(criar("pedido-apos-expiracao", slug).status()).isEqualTo(201);
             assertThat(confirmar(expiravelId, "pedido-expiravel").status()).isEqualTo(409);
             assertThat(liberar(expiravelId, "pedido-expiravel").dados().get("estado")).isEqualTo("EXPIRADA");
+            assertThat(criar("pedido-expiravel", slug).dados().get("estado")).isEqualTo("EXPIRADA");
             assertThat(jdbc.queryForObject("SELECT inativado_em IS NOT NULL FROM pecas WHERE slug = ?", Boolean.class, slug)).isTrue();
+        }
+    }
+
+    @Test
+    void liberarEReservarConcorrentementePreservaAReservaVencedora() throws Exception {
+        String slug = jdbc.query("SELECT slug FROM pecas WHERE disponibilidade = 'unica' "
+                + "AND situacao = 'publicada' AND inativado_em IS NULL LIMIT 1",
+                (rs, row) -> rs.getString(1)).getFirst();
+        String anterior = "corrida-anterior-" + UUID.randomUUID();
+        String posterior = "corrida-posterior-" + UUID.randomUUID();
+        UUID id = UUID.fromString((String) criar(anterior, slug).dados().get("id"));
+        var inicio = new CountDownLatch(1);
+        Resultado liberacao;
+        Resultado nova;
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var liberar = executor.submit(() -> { inicio.await(); return liberar(id, anterior); });
+            var reservar = executor.submit(() -> { inicio.await(); return criar(posterior, slug); });
+            inicio.countDown();
+            liberacao = liberar.get(30, TimeUnit.SECONDS);
+            nova = reservar.get(30, TimeUnit.SECONDS);
+        }
+        assertThat(liberacao.status()).isEqualTo(200);
+        assertThat(nova.status()).isIn(201, 409);
+        if (nova.status() == 201) {
+            assertThat(jdbc.queryForObject("SELECT inativado_em IS NOT NULL FROM pecas WHERE slug = ?",
+                    Boolean.class, slug)).isTrue();
+            assertThat(liberar(id, anterior).dados().get("estado")).isEqualTo("LIBERADA");
+            assertThat(jdbc.queryForObject("SELECT inativado_em IS NOT NULL FROM pecas WHERE slug = ?",
+                    Boolean.class, slug)).isTrue();
+        } else {
+            assertThat(jdbc.queryForObject("SELECT inativado_em IS NULL FROM pecas WHERE slug = ?",
+                    Boolean.class, slug)).isTrue();
         }
     }
 
