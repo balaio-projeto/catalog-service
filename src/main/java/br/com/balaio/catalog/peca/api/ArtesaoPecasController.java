@@ -19,12 +19,15 @@ public class ArtesaoPecasController {
     }
 
     @GetMapping
-    public PecasListResponse listar(@PathVariable String slug, @AuthenticationPrincipal Jwt jwt) {
+    public PecasListResponse listarPublicas(@PathVariable String slug) {
+        var dados = consultar.listarPorArtesao(slug, null).stream().map(PecaResponse::from).toList();
+        return new PecasListResponse(dados, null, null);
+    }
+
+    @GetMapping("/painel")
+    public PecasListResponse listarPainel(@PathVariable String slug, @AuthenticationPrincipal Jwt jwt) {
         var dono = PecasController.proprietario(jwt);
-        if (dono != null && !slug.equals("artesao-" + dono)) dono = null;
-        var dados = dono == null
-                ? consultar.listarPorArtesao(slug, null).stream().map(PecaResponse::from).toList()
-                : consultar.listarPainel(slug, dono).stream().map(PecaResponse::from).toList();
+        var dados = consultar.listarPainel(slug, dono).stream().map(PecaResponse::from).toList();
         return new PecasListResponse(dados, null, null);
     }
 }
