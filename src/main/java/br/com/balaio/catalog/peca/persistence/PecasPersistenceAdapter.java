@@ -142,8 +142,8 @@ public class PecasPersistenceAdapter implements ConsultarPecasPort, GerenciarPec
 
     private Sort ordenar(OrdenacaoCatalogo ordenacao) {
         return switch (ordenacao) {
-            case PRECO_ASC -> Sort.by(Sort.Order.asc("precoComDesconto"));
-            case PRECO_DESC -> Sort.by(Sort.Order.desc("precoComDesconto"));
+            case PRECO_ASC -> Sort.by(Sort.Order.asc("precoComDesconto"), Sort.Order.asc("ordemCatalogo"));
+            case PRECO_DESC -> Sort.by(Sort.Order.desc("precoComDesconto"), Sort.Order.asc("ordemCatalogo"));
             case AVALIACAO -> Sort.by(
                     Sort.Order.desc("avaliacao").nullsLast(),
                     Sort.Order.asc("ordemCatalogo"));

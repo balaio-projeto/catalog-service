@@ -77,6 +77,7 @@ public class JwtCatalogSecurityConfig {
         return http.csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/v1/artesaos/*/pecas/painel").authenticated()
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/v1/pecas").authenticated()
                         .requestMatchers(org.springframework.http.HttpMethod.PATCH, "/api/v1/pecas/*").authenticated()
                         .requestMatchers(org.springframework.http.HttpMethod.DELETE, "/api/v1/pecas/*").authenticated()

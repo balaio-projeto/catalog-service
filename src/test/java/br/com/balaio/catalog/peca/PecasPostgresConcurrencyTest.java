@@ -46,6 +46,7 @@ class PecasPostgresConcurrencyTest extends CatalogJwtTestSupport {
     }
 
     @Autowired TestRestTemplate http;
+    @Autowired javax.sql.DataSource dataSource;
     @MockitoBean ResolverArtesaoPort artesaos;
 
     @Test
@@ -64,6 +65,65 @@ class PecasPostgresConcurrencyTest extends CatalogJwtTestSupport {
         var dados = (List<Map>) lista.getBody().get("dados");
         assertThat(dados).extracting(peca -> peca.get("slug"))
                 .containsAll(iguais).containsAll(diferentes);
+    }
+
+    @Test
+    void migrationReconstroiTextoExistenteSemNomesDePerfilDoSeed() throws Exception {
+        String schema = "pi179_upgrade";
+        var antiga = org.flywaydb.core.Flyway.configure().dataSource(dataSource)
+                .schemas(schema).defaultSchema(schema).target("8").load();
+        antiga.migrate();
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(dataSource);
+        jdbc.update("UPDATE pi179_upgrade.pecas SET historia = ARRAY['Memória de gerações'], "
+                + "texto_busca = 'nome externo obsoleto' WHERE slug = 'leao-imperial-de-tracunhaem'");
+        var atual = org.flywaydb.core.Flyway.configure().dataSource(dataSource)
+                .schemas(schema).defaultSchema(schema).load();
+        assertThat(atual.migrate().migrationsExecuted).isEqualTo(1);
+        String texto = jdbc.queryForObject("SELECT texto_busca FROM pi179_upgrade.pecas "
+                + "WHERE slug = 'leao-imperial-de-tracunhaem'", String.class);
+        assertThat(texto).contains("leao imperial", "mestre-nuca", "memoria de geracoes")
+                .doesNotContain("externo obsoleto");
+        assertThat(jdbc.queryForObject("SELECT historia[1] FROM pi179_upgrade.pecas "
+                + "WHERE slug = 'leao-imperial-de-tracunhaem'", String.class)).isEqualTo("Memória de gerações");
+        assertThat(atual.migrate().migrationsExecuted).isZero();
+    }
+
+    @Test
+    void buscaHistoriaNoPostgresAtualizaVisibilidadeETextoAposPatch() throws Exception {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        String slug = criarAposSinal(new CountDownLatch(0), jwt, "Narrativa PI179");
+        var headers = new HttpHeaders();
+        headers.setBearerAuth(jwt);
+        String caminho = "/api/v1/pecas/" + slug;
+        assertThat(http.exchange(caminho, HttpMethod.PATCH, new HttpEntity<>(
+                Map.of("historia", List.of("Memória singular PI179 50%_\\")), headers), Map.class)
+                .getStatusCode().value()).isEqualTo(200);
+        for (String termo : List.of("MEMORIA SINGULAR PI179", "%", "_", "\\")) {
+            assertThat(buscar(termo)).extracting(peca -> peca.get("slug")).contains(slug);
+        }
+        assertThat(http.exchange(caminho, HttpMethod.PATCH, new HttpEntity<>(
+                Map.of("historia", List.of("Narrativa substituída PI179")), headers), Map.class)
+                .getStatusCode().value()).isEqualTo(200);
+        assertThat(buscar("memoria singular pi179")).isEmpty();
+        assertThat(buscar("substituida pi179")).hasSize(1);
+        assertThat(http.exchange(caminho, HttpMethod.PATCH, new HttpEntity<>(
+                Map.of("situacao", "rascunho"), headers), Map.class).getStatusCode().value()).isEqualTo(200);
+        assertThat(buscar("substituida pi179")).isEmpty();
+        assertThat(http.exchange(caminho, HttpMethod.PATCH, new HttpEntity<>(
+                Map.of("situacao", "publicada"), headers), Map.class).getStatusCode().value()).isEqualTo(200);
+        assertThat(http.exchange(caminho, HttpMethod.DELETE, new HttpEntity<>(headers), Map.class)
+                .getStatusCode().value()).isEqualTo(204);
+        assertThat(buscar("substituida pi179")).isEmpty();
+    }
+
+    private List<Map> buscar(String termo) {
+        var resposta = http.getForEntity(java.net.URI.create("/api/v1/pecas?q=" + java.net.URLEncoder.encode(
+                termo, java.nio.charset.StandardCharsets.UTF_8)), Map.class);
+        assertThat(resposta.getStatusCode().value()).isEqualTo(200);
+        return (List<Map>) resposta.getBody().get("dados");
     }
 
     private List<String> criarAoMesmoTempo(String jwt, String nomeA, String nomeB) throws Exception {

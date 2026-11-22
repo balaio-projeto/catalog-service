@@ -86,6 +86,51 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     }
 
     @Test
+    void buscaHistoriaAposCriacaoEdicaoERemocaoSemConsultarPerfil() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        var corpo = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        corpo.put("historia", List.of("Memória do ofício", "Herança de gerações"));
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, corpo, Map.class)
+                .getStatusCode().value()).isEqualTo(201);
+        org.mockito.Mockito.clearInvocations(artesaos);
+        for (String termo : List.of("MEMORIA", "heranca", "gerac", "vaso", "ceramica", "caruaru", "casa", "jarras")) {
+            assertThat(buscar(termo)).extracting(peca -> peca.get("slug")).containsExactly("vaso-do-sertao");
+        }
+        assertThat(requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", jwt,
+                Map.of("historia", List.of("Tradição renovada")), Map.class).getStatusCode().value()).isEqualTo(200);
+        assertThat(buscar("memoria")).isEmpty();
+        assertThat(buscar("TRADICAO")).hasSize(1);
+        assertThat(requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", jwt,
+                Map.of("historia", List.of()), Map.class).getStatusCode().value()).isEqualTo(200);
+        assertThat(buscar("tradicao")).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(artesaos);
+    }
+
+    @Test
+    void buscaTrataCuringasComoLiteraisEVazioComoListagem() {
+        persistir(peca("especial", "Coleção 50%_\\ especial", "100", "0", 1, "publicada"));
+        persistir(peca("comum", "Coleção comum", "100", "0", 2, "publicada"));
+        for (String termo : List.of("%", "_", "\\")) {
+            assertThat(buscar(termo)).extracting(peca -> peca.get("slug")).containsExactly("especial");
+        }
+        assertThat(buscar("termo-inexistente")).isEmpty();
+        assertThat(buscar("")).hasSize(2);
+        assertThat(buscar("   ")).hasSize(2);
+    }
+
+    private List<Map> buscar(String termo) {
+        var uri = java.net.URI.create("/api/v1/pecas?q=" + java.net.URLEncoder.encode(
+                termo, java.nio.charset.StandardCharsets.UTF_8));
+        var resposta = http.getForEntity(uri, Map.class);
+        assertThat(resposta.getStatusCode().value()).isEqualTo(200);
+        assertThat(resposta.getBody()).containsEntry("erro", null).containsKey("paginacao");
+        return (List<Map>) resposta.getBody().get("dados");
+    }
+
+    @Test
     void ordenaPeloPrecoComDesconto() {
         persistir(peca("preco-cheio", "Preço cheio", "80", "0", 1, "publicada"));
         persistir(peca("promocional", "Preço promocional", "100", "50", 2, "publicada"));
@@ -211,6 +256,8 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
         assertThat((List<?>) http.getForEntity(lista, Map.class).getBody().get("dados")).isEmpty();
         var propria = requisitar(HttpMethod.GET, lista + "/painel", jwt, null, Map.class);
         assertThat((List<?>) propria.getBody().get("dados")).hasSize(1);
+        assertThat(((List<Map>) propria.getBody().get("dados")).getFirst())
+                .containsEntry("estadoVenda", "rascunho").doesNotContainKey("vendidaEmPedido");
         var alheia = requisitar(HttpMethod.GET, lista, token(outro, "artesao"), null, Map.class);
         assertThat((List<?>) alheia.getBody().get("dados")).isEmpty();
 
@@ -579,11 +626,16 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
                 "/api/v1/artesaos/artesao-" + dono + "/pecas", jwt, null, Map.class);
         assertThat((List<Map>) publicaMesmoAutenticada.getBody().get("dados"))
                 .noneSatisfy(peca -> assertThat(peca.get("inativadoEm")).isNotNull());
-        for (String outroToken : List.of(token(UUID.randomUUID(), "artesao"), token(dono, "comprador"))) {
+        for (String outroToken : List.of(token(UUID.randomUUID(), "artesao"), token(dono, "comprador"),
+                token(dono, "admin"))) {
             assertThat(requisitar(HttpMethod.GET, painel, outroToken, null, Map.class)
                     .getStatusCode().value()).isEqualTo(403);
         }
-        assertThat(http.getForEntity(painel, Map.class).getStatusCode().value()).isEqualTo(403);
+        assertThat(http.getForEntity(painel, Map.class).getStatusCode().value()).isEqualTo(401);
+        assertThat(requisitar(HttpMethod.HEAD, painel, null, null, Map.class).getStatusCode().value()).isEqualTo(401);
+        assertThat(requisitar(HttpMethod.HEAD, painel, token(UUID.randomUUID(), "artesao"), null, Map.class)
+                .getStatusCode().value()).isEqualTo(403);
+        assertThat(requisitar(HttpMethod.HEAD, painel, jwt, null, Map.class).getStatusCode().value()).isEqualTo(200);
         assertThat(requisitar(HttpMethod.PATCH, caminho, jwt, Map.of("disponibilidade", "disponivel"), Map.class)
                 .getStatusCode().value()).isEqualTo(409);
     }

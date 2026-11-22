@@ -125,7 +125,7 @@ public class PecaJpaEntity {
         entity.materiais = peca.materiais();
         entity.autentica = peca.autentica();
         entity.textoBusca = normalizarTexto(String.join(" ", peca.nome(), peca.artesao(), peca.territorio(),
-                peca.tecnica(), peca.categoria(), peca.tipo()));
+                peca.tecnica(), peca.categoria(), peca.tipo(), String.join(" ", peca.historia())));
         return entity;
     }
 

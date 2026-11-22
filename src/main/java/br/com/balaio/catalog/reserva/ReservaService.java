@@ -74,7 +74,8 @@ public class ReservaService {
         jdbc.update("INSERT INTO reservas_peca(id, pedido_id, slug, preco, artesao, proprietario_id, chave, estado, expira_em) VALUES (?, ?, ?, ?, ?, ?, ?, 'RESERVADA', ?)",
                 id, comando.pedidoId(), comando.slug(), peca.preco(), peca.artesao(), peca.proprietarioId(), comando.chave(), expiraEm);
         jdbc.update("UPDATE pecas SET inativado_em = now() WHERE slug = ?", comando.slug());
-        return new Reserva(id, comando.pedidoId(), comando.slug(), "RESERVADA", expiraEm, peca.preco(), peca.artesao(), peca.proprietarioId());
+        // Usa a precisão persistida de expira_em também na primeira resposta, como nos replays.
+        return resposta(buscarPorId(id));
     }
 
     @Transactional
