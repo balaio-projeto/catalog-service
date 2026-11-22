@@ -27,6 +27,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import static org.mockito.Mockito.when;
 import br.com.balaio.catalog.peca.application.port.out.ResolverArtesaoPort;
+import br.com.balaio.catalog.peca.application.port.out.FotoStoragePort;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -54,8 +55,15 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     @MockitoBean
     private ResolverArtesaoPort artesaos;
 
+    @MockitoBean
+    private FotoStoragePort fotoStorage;
+
+    @Autowired
+    private br.com.balaio.catalog.peca.persistence.LimpezaFotosStorage limpezaFotos;
+
     @BeforeEach
     void limparBanco() {
+        jdbc.update("DELETE FROM limpeza_fotos_storage");
         transacao().executeWithoutResult(status ->
                 entityManager.createQuery("delete from PecaJpaEntity").executeUpdate());
     }
@@ -367,30 +375,96 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     }
 
     @Test
-    void guardaFotosNoBancoEServeCapaPelaUrlPublica() {
+    void guardaFotosNoObjectStorageEServeCapaPelaUrlPublica() {
         UUID dono = UUID.randomUUID();
         when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
                 .thenReturn("artesao-" + dono);
         var dados = new java.util.HashMap<String, Object>(dados("publicada", 100));
-        dados.put("fotos", List.of(Map.of("id", "foto-1", "nome", "capa.png",
-                "url", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==")));
+        String dataUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==";
+        dados.put("fotos", List.of(Map.of("id", "foto-1", "nome", "capa.png", "url", dataUri),
+                Map.of("id", "foto-2", "nome", "detalhe.png", "url", dataUri)));
+        byte[] conteudo = java.util.Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==");
+        org.mockito.Mockito.when(fotoStorage.obter(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(java.util.Optional.of(conteudo));
         var criada = requisitar(HttpMethod.POST, "/api/v1/pecas", token(dono, "artesao"), dados, Map.class);
         assertThat(criada.getStatusCode().value()).isEqualTo(201);
         var peca = (Map) criada.getBody().get("dados");
         var fotos = (List<Map>) peca.get("fotos");
-        assertThat(fotos).hasSize(1);
+        assertThat(fotos).extracting(foto -> foto.get("ordem")).containsExactly(0, 1);
         assertThat(peca).containsEntry("imagem", fotos.getFirst().get("url"));
         var arquivo = http.getForEntity((String) fotos.getFirst().get("url"), byte[].class);
         assertThat(arquivo.getStatusCode().value()).isEqualTo(200);
         assertThat(arquivo.getHeaders().getContentType()).isEqualTo(MediaType.IMAGE_PNG);
         assertThat(arquivo.getBody()).isNotEmpty();
+        var persistenciaFoto = jdbc.queryForMap("SELECT conteudo, storage_key FROM peca_fotos WHERE foto_id = ?", "foto-1");
+        assertThat(persistenciaFoto.get("conteudo")).isNull();
+        assertThat(persistenciaFoto.get("storage_key").toString()).startsWith("catalog/vaso-do-sertao/");
+        String chaveSubstituida = jdbc.queryForObject("SELECT storage_key FROM peca_fotos WHERE foto_id = ?", String.class, "foto-2");
+        org.mockito.Mockito.verify(fotoStorage, org.mockito.Mockito.times(2)).guardar(
+                org.mockito.ArgumentMatchers.contains("catalog/vaso-do-sertao/"),
+                org.mockito.ArgumentMatchers.eq("png"),
+                org.mockito.ArgumentMatchers.argThat(bytes -> java.util.Arrays.equals(bytes, conteudo)));
         var edicao = requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", token(dono, "artesao"),
                 Map.of("fotos", List.of(Map.of("id", "foto-1", "nome", "outra-capa.png",
                         "url", fotos.getFirst().get("url")))), Map.class);
         assertThat(edicao.getStatusCode().value()).isEqualTo(200);
         assertThat(((Map) edicao.getBody().get("dados")).get("imagem")).isEqualTo(fotos.getFirst().get("url"));
+        limpezaFotos.executar();
+        org.mockito.Mockito.verify(fotoStorage).remover(chaveSubstituida);
         assertThat(http.getForEntity((String) fotos.getFirst().get("url"), byte[].class).getStatusCode().value())
                 .isEqualTo(200);
+
+        String chaveStorage = persistenciaFoto.get("storage_key").toString();
+        assertThat(requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", token(dono, "artesao"),
+                Map.of("fotos", List.of()), Map.class).getStatusCode().value()).isEqualTo(200);
+        assertThat(http.getForEntity((String) fotos.getFirst().get("url"), byte[].class).getStatusCode().value())
+                .isEqualTo(404);
+        limpezaFotos.executar();
+        org.mockito.Mockito.verify(fotoStorage).remover(chaveStorage);
+    }
+
+    @Test
+    void preservaFilaDeLimpezaSeStorageFalhaERepeteAposRecuperacao() {
+        String chave = "catalog/diagnostico/orfa.png";
+        limpezaFotos.agendar(chave);
+        org.mockito.Mockito.doThrow(new br.com.balaio.catalog.peca.application.FotoStorageIndisponivelException())
+                .doNothing().when(fotoStorage).remover(chave);
+        limpezaFotos.executar();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM limpeza_fotos_storage", Integer.class)).isEqualTo(1);
+        limpezaFotos.executar();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM limpeza_fotos_storage", Integer.class)).isZero();
+    }
+
+    @Test
+    void recusaFormatoTamanhoEQuantidadeDeFotosForaDoLimite() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        String png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==";
+
+        var formatoInvalido = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        formatoInvalido.put("fotos", List.of(Map.of("id", "gif", "nome", "foto.gif",
+                "url", "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==")));
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, formatoInvalido, Map.class)
+                .getStatusCode().value()).isEqualTo(400);
+
+        var quantidadeInvalida = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        quantidadeInvalida.put("fotos", java.util.stream.IntStream.range(0, 6)
+                .mapToObj(indice -> Map.of("id", "foto-" + indice, "nome", "foto.png", "url", png)).toList());
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, quantidadeInvalida, Map.class)
+                .getStatusCode().value()).isEqualTo(400);
+
+        byte[] grande = new byte[5 * 1024 * 1024 + 1];
+        byte[] assinaturaPng = new byte[] {(byte) 137, 80, 78, 71, 13, 10, 26, 10, 0};
+        System.arraycopy(assinaturaPng, 0, grande, 0, assinaturaPng.length);
+        var tamanhoInvalido = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        tamanhoInvalido.put("fotos", List.of(Map.of("id", "grande", "nome", "grande.png",
+                "url", "data:image/png;base64," + java.util.Base64.getEncoder().encodeToString(grande))));
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, tamanhoInvalido, Map.class)
+                .getStatusCode().value()).isEqualTo(400);
+        org.mockito.Mockito.verifyNoInteractions(fotoStorage);
     }
 
     @Test

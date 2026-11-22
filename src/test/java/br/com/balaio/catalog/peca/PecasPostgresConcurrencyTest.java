@@ -78,7 +78,10 @@ class PecasPostgresConcurrencyTest extends CatalogJwtTestSupport {
                 + "texto_busca = 'nome externo obsoleto' WHERE slug = 'leao-imperial-de-tracunhaem'");
         var atual = org.flywaydb.core.Flyway.configure().dataSource(dataSource)
                 .schemas(schema).defaultSchema(schema).load();
-        assertThat(atual.migrate().migrationsExecuted).isEqualTo(1);
+        assertThat(atual.migrate().migrationsExecuted).isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM information_schema.columns "
+                + "WHERE table_schema = ? AND table_name = 'peca_fotos' AND column_name = 'storage_key'",
+                Integer.class, schema)).isEqualTo(1);
         String texto = jdbc.queryForObject("SELECT texto_busca FROM pi179_upgrade.pecas "
                 + "WHERE slug = 'leao-imperial-de-tracunhaem'", String.class);
         assertThat(texto).contains("leao imperial", "mestre-nuca", "memoria de geracoes")

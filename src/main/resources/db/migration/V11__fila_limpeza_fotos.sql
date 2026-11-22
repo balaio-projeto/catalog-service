@@ -1,0 +1,4 @@
+CREATE TABLE limpeza_fotos_storage (
+    storage_key VARCHAR(500) PRIMARY KEY,
+    criada_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
