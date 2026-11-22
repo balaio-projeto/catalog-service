@@ -209,7 +209,7 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
 
         String lista = "/api/v1/artesaos/" + slugArtesao + "/pecas";
         assertThat((List<?>) http.getForEntity(lista, Map.class).getBody().get("dados")).isEmpty();
-        var propria = requisitar(HttpMethod.GET, lista, jwt, null, Map.class);
+        var propria = requisitar(HttpMethod.GET, lista + "/painel", jwt, null, Map.class);
         assertThat((List<?>) propria.getBody().get("dados")).hasSize(1);
         var alheia = requisitar(HttpMethod.GET, lista, token(outro, "artesao"), null, Map.class);
         assertThat((List<?>) alheia.getBody().get("dados")).isEmpty();
@@ -227,6 +227,25 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
         assertThat((Map) http.getForEntity(detalhe, Map.class).getBody().get("dados"))
                 .containsEntry("nome", "Vaso editado");
         assertThat((List<?>) http.getForEntity(lista, Map.class).getBody().get("dados")).hasSize(1);
+    }
+
+    @Test
+    void pecaExcluidaSaiDaListagemPublicaDoArtesao() {
+        UUID dono = UUID.randomUUID();
+        String slugArtesao = "artesao-" + dono;
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(slugArtesao);
+        String jwt = token(dono, "artesao");
+        var criada = requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, dados("publicada", 120), Map.class);
+        assertThat(criada.getStatusCode().value()).isEqualTo(201);
+        String slugPeca = (String) ((Map<?, ?>) criada.getBody().get("dados")).get("slug");
+
+        String lista = "/api/v1/artesaos/" + slugArtesao + "/pecas";
+        assertThat((List<?>) http.getForEntity(lista, Map.class).getBody().get("dados")).hasSize(1);
+
+        assertThat(requisitar(HttpMethod.DELETE, "/api/v1/pecas/" + slugPeca, jwt, null, Map.class)
+                .getStatusCode().value()).isEqualTo(204);
+        assertThat((List<?>) http.getForEntity(lista, Map.class).getBody().get("dados")).isEmpty();
     }
 
     @Test
@@ -546,7 +565,7 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
         String jwt = token(dono, "artesao");
         assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, dados("publicada", 100), Map.class)
                 .getStatusCode().value()).isEqualTo(201);
-        String painel = "/api/v1/artesaos/artesao-" + dono + "/pecas";
+        String painel = "/api/v1/artesaos/artesao-" + dono + "/pecas/painel";
         var lista = requisitar(HttpMethod.GET, painel, jwt, null, Map.class);
         assertThat(((List<Map>) lista.getBody().get("dados")).getFirst())
                 .containsEntry("estadoVenda", "disponivel").doesNotContainKey("vendidaEmPedido");
@@ -556,11 +575,15 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
         Map inativa = ((List<Map>) propria.getBody().get("dados")).getFirst();
         assertThat(inativa).containsEntry("estadoVenda", "inativada");
         assertThat(inativa.get("inativadoEm")).isNotNull();
+        var publicaMesmoAutenticada = requisitar(HttpMethod.GET,
+                "/api/v1/artesaos/artesao-" + dono + "/pecas", jwt, null, Map.class);
+        assertThat((List<Map>) publicaMesmoAutenticada.getBody().get("dados"))
+                .noneSatisfy(peca -> assertThat(peca.get("inativadoEm")).isNotNull());
         for (String outroToken : List.of(token(UUID.randomUUID(), "artesao"), token(dono, "comprador"))) {
-            assertThat((List<?>) requisitar(HttpMethod.GET, painel, outroToken, null, Map.class)
-                    .getBody().get("dados")).isEmpty();
+            assertThat(requisitar(HttpMethod.GET, painel, outroToken, null, Map.class)
+                    .getStatusCode().value()).isEqualTo(403);
         }
-        assertThat((List<?>) http.getForEntity(painel, Map.class).getBody().get("dados")).isEmpty();
+        assertThat(http.getForEntity(painel, Map.class).getStatusCode().value()).isEqualTo(403);
         assertThat(requisitar(HttpMethod.PATCH, caminho, jwt, Map.of("disponibilidade", "disponivel"), Map.class)
                 .getStatusCode().value()).isEqualTo(409);
     }
