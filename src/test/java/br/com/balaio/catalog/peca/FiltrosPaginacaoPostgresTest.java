@@ -92,6 +92,34 @@ class FiltrosPaginacaoPostgresTest extends CatalogJwtTestSupport {
     }
 
     @Test
+    void faixaDePrecoFiltraPeloPrecoFinalCombinandoComFiltrosEPaginacao() {
+        inserir("abaixo", Map.of("preco", 49.99, "desconto", 0));
+        inserir("limite-inferior", Map.of("preco", 100, "desconto", 50));
+        inserir("meio", Map.of("preco", 120, "desconto", 0));
+        inserir("limite-superior", Map.of("preco", 200, "desconto", 0));
+        inserir("acima-pelo-desconto", Map.of("preco", 250, "desconto", 10));
+        inserir("meio-encomenda", Map.of("preco", 150, "desconto", 0, "disponibilidade", "encomenda"));
+        inserir("meio-inativa", Map.of("preco", 150, "desconto", 0, "inativado_em", OffsetDateTime.now()));
+        var faixa = Map.<String, Object>of("precoMin", 50, "precoMax", 200, "ordenar", "preco-asc");
+        assertThat(slugs(consultar(faixa)))
+                .containsExactly("pi180-limite-inferior", "pi180-meio", "pi180-meio-encomenda", "pi180-limite-superior");
+        var combinada = new HashMap<>(faixa);
+        combinada.put("disponibilidade", "unica");
+        combinada.put("tamanho", 2);
+        combinada.put("pagina", 2);
+        var pagina = consultar(combinada);
+        assertThat(slugs(pagina)).containsExactly("pi180-limite-superior");
+        assertThat((Map) pagina.get("paginacao")).containsEntry("total", 3).containsEntry("totalPaginas", 2);
+        assertThat(slugs(consultar(Map.of("precoMin", "225.01")))).isEmpty();
+        assertThat(slugs(consultar(Map.of("precoMin", "200.01", "precoMax", "224.99")))).isEmpty();
+        assertThat(slugs(consultar(Map.of("precoMin", "225")))).containsExactly("pi180-acima-pelo-desconto");
+        assertThat(slugs(consultar(Map.of("precoMax", "49.99")))).containsExactly("pi180-abaixo");
+        var invertida = http.getForEntity("/api/v1/pecas?precoMin=300&precoMax=100", Map.class);
+        assertThat(invertida.getStatusCode().value()).isEqualTo(400);
+        assertThat((Map) invertida.getBody().get("erro")).containsEntry("campo", "precoMax");
+    }
+
+    @Test
     void paginaPreservaMetadadosEAjustaLimitesInclusiveSemResultado() {
         for (String nome : List.of("a", "b", "c")) inserir(nome, Map.of());
         var primeira = consultar(Map.of("pagina", 0, "tamanho", 2));

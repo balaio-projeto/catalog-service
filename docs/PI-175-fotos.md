@@ -52,15 +52,17 @@ healthchecks antes de repetir os comandos de gravação.
 Dentro de `platform`, em PowerShell 7.2 ou superior:
 
 ```powershell
-./scripts/prepare-catalog-storage.ps1 -Enable
-./scripts/prepare-local-storage.ps1
-docker compose up -d --build
+./storage/scripts/prepare-local-storage.ps1
+docker compose -f docker-compose.yml -f docker-compose.storage.yml --profile extended --profile storage up -d --build --wait
 ```
 
-O preparador gera/preserva credenciais exclusivas e inclui `storage` em
-`COMPOSE_PROFILES` no `.env` ignorado pelo Git. Certificados devem ser preparados
-pela conta Windows que usa o Docker. Configuração parcial de credenciais é
-recusada; não há rotação automática de segredos.
+`scripts/start-local.ps1` faz os dois passos sozinho. O preparador gera/preserva
+o par `CATALOG_S3_ACCESS_KEY_ID`/`CATALOG_S3_SECRET_ACCESS_KEY` no `.env`
+ignorado pelo Git, independente dos pares do administrador e do Profile, e o
+`docker-compose.storage.yml` entrega esse par apenas ao `seaweedfs` e ao
+`catalog-service`, com `CATALOG_S3_ENABLED=true`. Certificados devem ser
+preparados pela conta Windows que usa o Docker. Configuração parcial ou
+reutilizada de credenciais é recusada; não há rotação automática de segredos.
 
 Configurações: `CATALOG_S3_ENABLED`, `CATALOG_S3_ENDPOINT`, `CATALOG_S3_REGION`,
 `CATALOG_S3_BUCKET`, `CATALOG_S3_ACCESS_KEY_ID`, `CATALOG_S3_SECRET_ACCESS_KEY`.
@@ -70,9 +72,14 @@ O volume `seaweedfs-data` preserva os objetos; não apagar volumes para atualiza
 ## Validação reproduzível
 
 ```powershell
-docker compose exec -T seaweedfs /bin/sh /opt/balaio/storage/test-catalog-identity.sh
-./scripts/test-catalog-fotos.ps1 -BaseUrl http://localhost:4321 -RestartServices -VerifyStorageFailure -VerifyPages
+./storage/scripts/test-catalog-storage.ps1
 ```
+
+`test-catalog-storage.ps1` (no `platform`) valida a identidade `balaio-catalog`
+na rede do Compose: leitura, escrita e exclusão só em `catalog/*`, recusa nos
+demais prefixos, ACL, listagem, criação de bucket e acesso anônimo, além de
+credenciais fora dos logs. O roteiro HTTP abaixo foi executado com `curl` contra o
+gateway da pilha local.
 
 O roteiro cria dois artesãos e uma peça com identificador exclusivo, valida
 uploads, conteúdo dos binários, ordem, capa, posse, substituição, exclusão no S3,

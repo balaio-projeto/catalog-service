@@ -103,13 +103,28 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
         if (pecas.possuiReservaAtiva(slug))
             throw new ErroPecaException(409, "PECA_INDISPONIVEL", null, "Peça reservada ou vendida não pode ser excluída.");
         if (atual.inativadoEm() != null) return atual;
-        var inativa = new Peca(atual.slug(), atual.nome(), atual.artesao(), atual.territorio(), atual.tecnica(),
+        return pecas.salvar(comInativacao(atual, OffsetDateTime.now(ZoneOffset.UTC)), null);
+    }
+
+    @Transactional
+    @Override
+    public Peca reativar(String slug, UUID contaId) {
+        pecas.bloquearPeca(slug);
+        var atual = pecas.obter(slug).orElseThrow(this::naoEncontrado);
+        exigirProprietario(atual, contaId);
+        if (pecas.possuiReservaAtiva(slug))
+            throw new ErroPecaException(409, "PECA_INDISPONIVEL", null, "Peça reservada ou vendida não pode ser reativada.");
+        if (atual.inativadoEm() == null) return atual;
+        return pecas.salvar(comInativacao(atual, null), null);
+    }
+
+    private Peca comInativacao(Peca atual, OffsetDateTime inativadoEm) {
+        return new Peca(atual.slug(), atual.nome(), atual.artesao(), atual.territorio(), atual.tecnica(),
                 atual.categoria(), atual.tipo(), atual.preco(), atual.desconto(), atual.disponibilidade(),
                 atual.prazoProducaoDias(), atual.historia(), atual.imagem(), atual.avaliacao(),
-                atual.totalAvaliacoes(), atual.situacao(), OffsetDateTime.now(ZoneOffset.UTC),
+                atual.totalAvaliacoes(), atual.situacao(), inativadoEm,
                 atual.ordemCatalogo(), atual.proprietarioId(), atual.criadaEm(), atual.fotos(),
                 atual.materiais(), atual.autentica());
-        return pecas.salvar(inativa, null);
     }
 
     private void exigirProprietario(Peca peca, UUID contaId) {

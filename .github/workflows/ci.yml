@@ -9,6 +9,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: balaio_catalog
+          POSTGRES_USER: balaio_catalog_app
+          POSTGRES_PASSWORD: balaio-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U balaio_catalog_app -d balaio_catalog"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      CATALOG_POSTGRES_TEST: 'true'
+      CATALOG_POSTGRES_TEST_DB: externo
+      CATALOG_DB_URL: jdbc:postgresql://localhost:5432/balaio_catalog
+      CATALOG_DB_USERNAME: balaio_catalog_app
+      CATALOG_DB_PASSWORD: balaio-ci
+
     steps:
       - uses: actions/checkout@v4
 

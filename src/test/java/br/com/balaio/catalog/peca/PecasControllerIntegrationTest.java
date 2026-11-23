@@ -150,6 +150,35 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     }
 
     @Test
+    void faixaDePrecoUsaPrecoFinalComDescontoEValidaLimites() {
+        persistir(peca("barata", "Barata", "40", "0", 1, "publicada"));
+        persistir(peca("promocional", "Promocional", "200", "50", 2, "publicada"));
+        persistir(peca("cara", "Cara", "300", "0", 3, "publicada"));
+
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMin=50&precoMax=100")).containsExactly("promocional");
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMin=100")).containsExactly("promocional", "cara");
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMax=99.99")).containsExactly("barata");
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMin=100&precoMax=100")).containsExactly("promocional");
+
+        for (var invalida : Map.of("precoMin=-1", "precoMin", "precoMax=-0.01", "precoMax",
+                "precoMin=200&precoMax=100", "precoMax").entrySet()) {
+            ResponseEntity<Map> resposta = http.getForEntity("/api/v1/pecas?" + invalida.getKey(), Map.class);
+            assertThat(resposta.getStatusCode().value()).isEqualTo(400);
+            assertThat(resposta.getBody()).containsEntry("dados", null);
+            assertThat((Map) resposta.getBody().get("erro")).containsEntry("codigo", "REQUISICAO_INVALIDA")
+                    .containsEntry("campo", invalida.getValue());
+        }
+        ResponseEntity<Map> malformada = http.getForEntity("/api/v1/pecas?precoMax=caro", Map.class);
+        assertThat(malformada.getStatusCode().value()).isEqualTo(400);
+    }
+
+    private List<String> slugsDaListagem(String caminho) {
+        ResponseEntity<Map> resposta = http.getForEntity(caminho, Map.class);
+        assertThat(resposta.getStatusCode().value()).isEqualTo(200);
+        return ((List<Map>) resposta.getBody().get("dados")).stream().map(peca -> (String) peca.get("slug")).toList();
+    }
+
+    @Test
     void parametroPaginaInvalidoRetornaErroPadronizado() {
         ResponseEntity<Map> resposta = http.getForEntity(
                 "/api/v1/pecas?pagina=abc",
@@ -232,6 +261,31 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
         assertThat(http.getForEntity(caminho, Map.class).getStatusCode().value()).isEqualTo(404);
         assertThat(requisitar(HttpMethod.PATCH, caminho, jwt, Map.of("preco", 130), Map.class)
                 .getStatusCode().value()).isEqualTo(409);
+    }
+
+    @Test
+    void reativaPecaPropriaInativadaDeVoltaNaVitrine() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        String caminho = "/api/v1/pecas/vaso-do-sertao";
+        String reativacao = caminho + "/reativacao";
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, dados("publicada", 120), Map.class)
+                .getStatusCode().value()).isEqualTo(201);
+        assertThat(requisitar(HttpMethod.DELETE, caminho, jwt, null, Map.class).getStatusCode().value())
+                .isEqualTo(204);
+        assertThat(http.getForEntity(caminho, Map.class).getStatusCode().value()).isEqualTo(404);
+        assertThat(requisitar(HttpMethod.POST, reativacao, token(UUID.randomUUID(), "artesao"), null, Map.class)
+                .getStatusCode().value()).isEqualTo(404);
+        assertThat(requisitar(HttpMethod.POST, reativacao, token(UUID.randomUUID(), "comprador"), null, Map.class)
+                .getStatusCode().value()).isEqualTo(403);
+        var reativada = requisitar(HttpMethod.POST, reativacao, jwt, null, Map.class);
+        assertThat(reativada.getStatusCode().value()).isEqualTo(200);
+        assertThat((Map) reativada.getBody().get("dados")).containsEntry("inativadoEm", null);
+        assertThat(requisitar(HttpMethod.POST, reativacao, jwt, null, Map.class).getStatusCode().value())
+                .isEqualTo(200);
+        assertThat(http.getForEntity(caminho, Map.class).getStatusCode().value()).isEqualTo(200);
     }
 
     @Test

@@ -65,6 +65,11 @@ public class PecasController {
         return ResponseEntity.noContent().build();
     }
 
+    @PostMapping("/{slug}/reativacao")
+    public PecaItemResponse reativar(@PathVariable String slug, @AuthenticationPrincipal Jwt jwt) {
+        return new PecaItemResponse(PecaResponse.from(atualizarPeca.reativar(slug, exigirModificador(jwt))), null);
+    }
+
     private UUID exigirModificador(Jwt jwt) {
         if (jwt == null || !java.util.Set.of("artesao", "administrador", "admin").contains(jwt.getClaimAsString("papel")))
             throw new ErroPecaException(403, "SEM_PERMISSAO", null, "Operação permitida apenas ao proprietário ou administrador.");
@@ -111,11 +116,14 @@ public class PecasController {
             @RequestParam(required = false) String tipo,
             @RequestParam(required = false) String disponibilidade,
             @RequestParam(required = false) Boolean desconto,
+            @RequestParam(required = false) java.math.BigDecimal precoMin,
+            @RequestParam(required = false) java.math.BigDecimal precoMax,
             @RequestParam(required = false) String ordenar,
             @RequestParam(required = false) Integer pagina,
             @RequestParam(required = false) Integer tamanho) {
         var resultado = listarPecas.listar(
-                new FiltroCatalogo(q, tecnica, territorio, categoria, tipo, disponibilidade, desconto),
+                new FiltroCatalogo(q, tecnica, territorio, categoria, tipo, disponibilidade, desconto,
+                        precoMin, precoMax),
                 pagina,
                 tamanho,
                 mapearOrdenacao(ordenar));

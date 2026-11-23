@@ -15,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
@@ -35,7 +36,9 @@ import br.com.balaio.catalog.CatalogJwtTestSupport;
 class ReservasPostgresTest extends CatalogJwtTestSupport {
     @TestConfiguration(proxyBeanMethods = false)
     static class Postgres {
-        @Bean @ServiceConnection PostgreSQLContainer postgres() {
+        @Bean @ServiceConnection
+        @ConditionalOnExpression("'${CATALOG_POSTGRES_TEST_DB:testcontainers}' == 'testcontainers'")
+        PostgreSQLContainer postgres() {
             return new PostgreSQLContainer("postgres:18-alpine");
         }
     }
@@ -313,7 +316,9 @@ class ReservasPostgresTest extends CatalogJwtTestSupport {
         assertThat(OffsetDateTime.parse((String) nova.dados().get("expiraEm"))).isAfter(OffsetDateTime.now());
         assertThat(jdbc.queryForObject("SELECT estado FROM reservas_peca WHERE id = ?",
                 String.class, idAnterior)).isEqualTo("EXPIRADA");
-        assertThat(criar(pedido, slug).status()).isEqualTo(409);
+        var replayAntigo = criar(pedido, slug);
+        assertThat(replayAntigo.dados()).containsEntry("id", idAnterior.toString())
+                .containsEntry("estado", "EXPIRADA");
         assertThat(confirmar(idAnterior, pedido).status()).isEqualTo(409);
         assertThat(liberar(idAnterior, pedido).dados()).containsEntry("estado", "EXPIRADA");
         assertThat(criar(novoPedido, slug).dados()).isEqualTo(nova.dados());

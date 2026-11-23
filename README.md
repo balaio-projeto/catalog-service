@@ -15,7 +15,7 @@ Enquanto uma peça está inativada por reserva, o PATCH do artesão retorna 409;
 - A criação bloqueia a chave idempotente por advisory lock transacional e a peça por `SELECT ... FOR UPDATE`. O índice único parcial permite somente uma reserva RESERVADA/CONSUMIDA por peça. A reserva e a retirada da vitrine são gravadas na mesma transação do catálogo.
 - Pedidos concorrentes para a mesma peça produzem um 201 e um 409. Requisições simultâneas com o mesmo pedido, slug e chave retornam 201 com o mesmo identificador, preço e vencimento, sem duplicar a reserva ou renovar seu prazo.
 - A chave é vinculada ao pedido e ao slug: reutilizá-la para outra peça ou pedido retorna 409 `RESERVA_CONFLITANTE`, inclusive sob concorrência. O commerce usa `reservar:<pedidoId>:<slug>` e deve preservá-la ao repetir uma chamada após timeout.
-- Uma reserva LIBERADA/EXPIRADA não é recriada pelo replay do pedido/chave antigos (409). Um novo pedido pode reservar após liberação ou expiração. Uma criação válida de outro pedido expira a reserva vencida da peça na própria transação, sem aguardar o agendador.
+- Uma reserva LIBERADA/EXPIRADA não é recriada pelo replay do pedido/chave antigos: o replay devolve a mesma reserva com o estado persistido (`LIBERADA`/`EXPIRADA`), sem renovar prazo nem retirar a peça da vitrine, e o commerce recusa qualquer estado diferente de `RESERVADA`/`CONSUMIDA` ao reservar. Um novo pedido pode reservar após liberação ou expiração. Uma criação válida de outro pedido expira a reserva vencida da peça na própria transação, sem aguardar o agendador.
 - `encomenda` e `disponivel` retornam 409 `RESERVA_NAO_APLICAVEL`, sem criar reserva ou inativar a peça. O commerce segue o fluxo de encomenda sem invocar a reserva exclusiva; consultar cotação não reserva a peça.
 - Slug inexistente retorna 404; peça única não pública/inativa retorna 409; comando sem pedido, slug ou chave válidos retorna 400. Os erros preservam `{dados:null,erro:{codigo,mensagem}}`.
 
@@ -27,7 +27,7 @@ Serviço responsável pelos dados e pela persistência do catálogo de peças. O
 
 - GET /api/v1/pecas: consulta pública de peças publicadas e ativas.
 - Busca textual sem diferença entre maiúsculas e minúsculas ou acentos.
-- Filtros por técnica, território, categoria, tipo, disponibilidade e desconto.
+- Filtros por técnica, território, categoria, tipo, disponibilidade, desconto e faixa de preço final (`precoMin`/`precoMax`).
 - Ordenação por preço final com desconto, avaliação ou ordem de publicação.
 - Paginação no envelope compatível com a Fake API: dados, erro e paginacao.
 - Flyway cria a tabela e carrega as 24 peças do seed atual do frontend.
@@ -41,7 +41,7 @@ Serviço responsável pelos dados e pela persistência do catálogo de peças. O
 
 ## Contrato
 
-Parâmetros opcionais: q, tecnica, territorio, categoria, tipo, disponibilidade, desconto, ordenar, pagina e tamanho.
+Parâmetros opcionais: q, tecnica, territorio, categoria, tipo, disponibilidade, desconto, precoMin, precoMax, ordenar, pagina e tamanho.
 
 Valores de ordenar: preco-asc, preco-desc, avaliacao e recentes. O filtro desconto=true mostra só peças com desconto. Sem tamanho, a API devolve todos os resultados até 100; valores maiores também são limitados a 100. A página pedida é ajustada para o intervalo existente.
 
@@ -84,7 +84,30 @@ O desempate mantém peças com preços iguais em ordem determinística entre pá
 
 O envelope contém `pagina`, `tamanho`, `total` e `totalPaginas`. `pagina` omitida, zero ou negativa resulta em 1; acima da última página é ajustada para a última. `tamanho` omitido ou zero usa o total filtrado entre 1 e 100; negativo é ajustado para 1 e acima de 100 para 100. Sem resultados, `pagina=1`, `total=0`, `totalPaginas=1`, preservando o tamanho solicitado após seus limites. Sem tamanho informado, a lista vazia usa `tamanho=1`. Esses ajustes preservam o comportamento existente; não são erros de validação. Números ou booleanos malformados retornam 400 `REQUISICAO_INVALIDA` no envelope padrão.
 
-`FiltrosPaginacaoPostgresTest`, habilitado por `CATALOG_POSTGRES_TEST=true`, verifica interseção de todos os filtros, visibilidade, ordenações e desempates, avaliação ausente, limites de página, teto de 100 e parâmetros inválidos. Não há consulta a outro serviço nem necessidade de Redis. `precoMin` e `precoMax` continuam fora do contrato, conforme o card; não foram introduzidos nesta entrega.
+`FiltrosPaginacaoPostgresTest`, habilitado por `CATALOG_POSTGRES_TEST=true`, verifica interseção de todos os filtros, visibilidade, ordenações e desempates, avaliação ausente, limites de página, teto de 100 e parâmetros inválidos. Não há consulta a outro serviço nem necessidade de Redis.
+
+### Faixa de preço (PI-31)
+
+`precoMin` e `precoMax` são uma extensão do contrato acordada com o frontend (filtro de faixa da tela `/search`). Ambos são opcionais, decimais em reais, inclusivos e comparados com o preço final após desconto, o mesmo critério de `preco-asc`/`preco-desc`. Combinam por interseção com os demais filtros, entram na contagem e na paginação e mantêm a visibilidade pública. Valor negativo retorna 400 `REQUISICAO_INVALIDA` com `campo` igual ao parâmetro; `precoMin` maior que `precoMax` retorna 400 com `campo: "precoMax"`; texto não numérico retorna 400 no envelope padrão. O frontend nunca envia faixa invertida: ele troca os valores ao ler a URL. Cobertura: `PecasControllerIntegrationTest.faixaDePrecoUsaPrecoFinalComDescontoEValidaLimites` e `FiltrosPaginacaoPostgresTest.faixaDePrecoFiltraPeloPrecoFinalCombinandoComFiltrosEPaginacao`.
+
+### Desempenho da vitrine e decisão sobre cache (PI-178)
+
+Meta adotada, já que o card não fixa um número: p95 de `GET /api/v1/pecas` até **300 ms pelo gateway** na pilha local. Redis só seria proposto se uma medição reproduzível ficasse acima dela depois de avaliar consulta, índice e paginação.
+
+Medição de 22/11/2026, pilha `balaio-local` (Docker Desktop no Windows, catálogo com 27 peças públicas), 300 requisições sequenciais por cenário após 20 de aquecimento, cronometradas no host:
+
+| Origem | Cenário | Itens | p50 | p95 | p99 |
+| --- | --- | --- | --- | --- | --- |
+| gateway | `GET /api/v1/pecas` (home, até 100) | 27 | 13,6 ms | 31,5 ms | 37,4 ms |
+| gateway | `?tamanho=12&ordenar=recentes` | 12 | 10,0 ms | 27,0 ms | 32,5 ms |
+| gateway | `?q=barro&categoria=Casa & Mesa&tamanho=12` | 8 | 10,0 ms | 24,4 ms | 32,5 ms |
+| gateway | `?precoMin=50&precoMax=500&ordenar=preco-asc&tamanho=12` | 12 | 11,8 ms | 24,4 ms | 34,9 ms |
+| catalog direto | home | 27 | 10,3 ms | 31,9 ms | 36,0 ms |
+| catalog direto | faixa de preço | 12 | 8,6 ms | 18,9 ms | 31,9 ms |
+
+Para antecipar crescimento, a tabela `pecas` foi copiada para um PostgreSQL 18 descartável e ampliada para 21.030 peças (18.927 públicas). Tempo de execução das consultas equivalentes às do serviço (`EXPLAIN ANALYZE`, 30 execuções cada): contagem pública p95 11 ms; primeira página e página 11 ordenadas por `ordem_catalogo` p95 0,24 ms (índice único); busca `%barro%` + categoria p95 25 ms (contagem) e 27 ms (página); faixa de preço p95 19 ms (contagem) e 44 ms (página ordenada por preço final, com varredura sequencial).
+
+Decisão: **cache não é necessário nesta etapa**. O p95 atual fica cerca de 10 vezes abaixo da meta e, mesmo com volume ~700 vezes maior, a soma de contagem e página fica abaixo de 100 ms. Redis não foi adicionado ao Compose nem como dependência. Se o catálogo crescer a ponto de a busca por texto ou a faixa de preço passarem da meta, o próximo passo é índice (trigrama em `texto_busca` ou índice de expressão no preço final), ainda sem cache. Para repetir a medição, use o mesmo roteiro: N requisições sequenciais a `GET /api/v1/pecas` pelo gateway, calculando p50/p95/p99.
 
 ### Escrita
 
@@ -132,6 +155,8 @@ Requer JDK 25, PostgreSQL e o banco balaio_catalog criado antes da primeira inic
 
 No Windows, use .\mvnw.cmd spring-boot:run e .\mvnw.cmd test. Em Linux/macOS, use ./mvnw spring-boot:run e ./mvnw test.
 
+Os testes com PostgreSQL real (`FiltrosPaginacaoPostgresTest`, `PecasPostgresConcurrencyTest` e `ReservasPostgresTest`) só rodam com `CATALOG_POSTGRES_TEST=true`. Por padrão eles sobem `postgres:18-alpine` por Testcontainers. Com `CATALOG_POSTGRES_TEST_DB=externo`, usam o banco indicado em `CATALOG_DB_URL`/`CATALOG_DB_USERNAME`/`CATALOG_DB_PASSWORD`; use um banco descartável, pois os testes inserem e alteram peças e reservas. O CI (`.github/workflows/ci.yml`) roda `./mvnw -B verify` com um service `postgres:18-alpine` nesse modo, então a suíte inteira, inclusive a de reservas, roda a cada push e pull request.
+
 - Swagger UI: http://localhost:8081/swagger-ui.html
 - OpenAPI JSON: http://localhost:8081/v3/api-docs
 - Health: http://localhost:8081/actuator/health
@@ -177,7 +202,7 @@ de limpeza; falhas S3 retornam 503 no envelope padrão e as exclusões têm retr
 
 O cadastro e a edição recebem `fotos` no contrato JSON existente. Para uma foto nova, `url` contém uma data URI `data:image/(jpeg|png|webp);base64,...`; o catálogo valida assinatura e tamanho (até 5 MiB), guarda o binário no bucket privado `balaio-media` sob `catalog/` e persiste no PostgreSQL apenas metadados e `storage_key`. Fotos existentes podem ser mantidas e a ordem enviada é persistida. `GET /api/v1/arquivos/pecas/{uuid}.{jpg|png|webp}` entrega a imagem através do catalog-service/gateway; não há acesso direto do navegador ao storage.
 
-No Compose, habilite `CATALOG_S3_ENABLED=true` e forneça `CATALOG_S3_ACCESS_KEY_ID` / `CATALOG_S3_SECRET_ACCESS_KEY` fora do repositório. A identidade `balaio-catalog`, provisionada por `platform/scripts/prepare-catalog-storage.ps1 -Enable`, tem somente `Read`/`Write` no recurso `balaio-media/catalog/*`, incluindo exclusão e sem acesso aos demais prefixos. O provisionamento e os testes de isolamento estão em `platform/docs/storage-local.md`. Não reutilize `balaio-local-admin`. O padrão desabilitado mantém a inicialização local sem storage e sem afetar URLs de fotos dos dados demonstrativos. A coluna `conteudo` permanece somente para leitura/migração de fotos legadas; ao salvar uma peça com foto legada, ela é migrada para o storage configurado.
+No Compose, habilite `CATALOG_S3_ENABLED=true` e forneça `CATALOG_S3_ACCESS_KEY_ID` / `CATALOG_S3_SECRET_ACCESS_KEY` fora do repositório. A identidade `balaio-catalog`, provisionada por `platform/storage/scripts/prepare-local-storage.ps1` (chamado pelo `start-local.ps1`), tem somente `GetObject`/`PutObject`/`DeleteObject` em `balaio-media/catalog/*` e nenhum acesso aos demais prefixos. O `platform/docker-compose.storage.yml` já entrega `CATALOG_S3_ENABLED=true` e o par ao catálogo. O provisionamento e os testes de isolamento estão em `platform/storage/docs/storage-local.md` e `platform/storage/scripts/test-catalog-storage.ps1`. Não reutilize `balaio-local-admin`. O padrão desabilitado mantém a inicialização local sem storage e sem afetar URLs de fotos dos dados demonstrativos. A coluna `conteudo` permanece somente para leitura/migração de fotos legadas; ao salvar uma peça com foto legada, ela é migrada para o storage configurado.
 
 ## Referências e histórico (PI-215)
 

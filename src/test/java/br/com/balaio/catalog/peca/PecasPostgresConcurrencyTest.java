@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
@@ -40,6 +41,7 @@ class PecasPostgresConcurrencyTest extends CatalogJwtTestSupport {
     static class Postgres {
         @Bean
         @ServiceConnection
+        @ConditionalOnExpression("'${CATALOG_POSTGRES_TEST_DB:testcontainers}' == 'testcontainers'")
         PostgreSQLContainer postgres() {
             return new PostgreSQLContainer("postgres:18-alpine");
         }

@@ -37,6 +37,15 @@ final class PecaSpecifications {
                     root.<BigDecimal>get("desconto"), BigDecimal.ZERO));
         }
 
+        if (filtro.precoMin() != null) {
+            spec = spec.and((root, query, criteria) -> criteria.greaterThanOrEqualTo(
+                    root.<BigDecimal>get("precoComDesconto"), filtro.precoMin()));
+        }
+        if (filtro.precoMax() != null) {
+            spec = spec.and((root, query, criteria) -> criteria.lessThanOrEqualTo(
+                    root.<BigDecimal>get("precoComDesconto"), filtro.precoMax()));
+        }
+
         return spec;
     }
 
