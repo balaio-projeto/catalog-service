@@ -120,6 +120,15 @@ class FiltrosPaginacaoPostgresTest extends CatalogJwtTestSupport {
     }
 
     @Test
+    void precoFinalComDescontoQuebradoEhArredondadoComoNaReserva() {
+        inserir("quebrado", Map.of("preco", new BigDecimal("99.99"), "desconto", new BigDecimal("15")));
+        inserir("meio-centavo", Map.of("preco", new BigDecimal("10.10"), "desconto", new BigDecimal("12.5")));
+
+        assertThat(slugs(consultar(Map.of("precoMin", "84.99", "precoMax", "84.99")))).containsExactly("pi180-quebrado");
+        assertThat(slugs(consultar(Map.of("precoMin", "8.84", "precoMax", "8.84")))).containsExactly("pi180-meio-centavo");
+    }
+
+    @Test
     void paginaPreservaMetadadosEAjustaLimitesInclusiveSemResultado() {
         for (String nome : List.of("a", "b", "c")) inserir(nome, Map.of());
         var primeira = consultar(Map.of("pagina", 0, "tamanho", 2));
