@@ -94,7 +94,7 @@ public class PecaJpaEntity {
     @Column(nullable = false)
     private boolean autentica;
 
-    @Formula("preco * (1 - desconto / 100.0)")
+    @Formula("round(preco * (1 - desconto / 100.0), 2)")
     private BigDecimal precoComDesconto;
 
     protected PecaJpaEntity() {

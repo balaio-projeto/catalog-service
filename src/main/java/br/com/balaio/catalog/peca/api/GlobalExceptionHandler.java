@@ -62,7 +62,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiErrorResponse> tratarCorpoInvalido(
             HttpMessageNotReadableException exception) {
         String detalhe = exception.getMostSpecificCause().getMessage();
-        String campo = detalhe != null && detalhe.contains("preco") ? "preco"
+        String campo = detalhe != null && detalhe.contains("\"desconto\"") ? "desconto"
+                : detalhe != null && detalhe.contains("preco") ? "preco"
                 : detalhe != null && detalhe.contains("prazoProducaoDias") ? "prazoProducaoDias" : null;
         return ResponseEntity.badRequest().body(new ApiErrorResponse(null,
                 new ErroDetalheResponse("REQUISICAO_INVALIDA", "Dados inválidos.", campo)));
