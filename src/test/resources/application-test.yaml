@@ -1,3 +1,7 @@
+balaio:
+  catalog:
+    storage:
+      cleanup-delay-ms: 86400000
 spring:
   datasource:
     url: jdbc:h2:mem:catalog-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE

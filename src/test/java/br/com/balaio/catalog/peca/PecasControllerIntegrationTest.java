@@ -27,6 +27,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import static org.mockito.Mockito.when;
 import br.com.balaio.catalog.peca.application.port.out.ResolverArtesaoPort;
+import br.com.balaio.catalog.peca.application.port.out.FotoStoragePort;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -54,8 +55,15 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     @MockitoBean
     private ResolverArtesaoPort artesaos;
 
+    @MockitoBean
+    private FotoStoragePort fotoStorage;
+
+    @Autowired
+    private br.com.balaio.catalog.peca.persistence.LimpezaFotosStorage limpezaFotos;
+
     @BeforeEach
     void limparBanco() {
+        jdbc.update("DELETE FROM limpeza_fotos_storage");
         transacao().executeWithoutResult(status ->
                 entityManager.createQuery("delete from PecaJpaEntity").executeUpdate());
     }
@@ -86,6 +94,51 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     }
 
     @Test
+    void buscaHistoriaAposCriacaoEdicaoERemocaoSemConsultarPerfil() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        var corpo = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        corpo.put("historia", List.of("Memória do ofício", "Herança de gerações"));
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, corpo, Map.class)
+                .getStatusCode().value()).isEqualTo(201);
+        org.mockito.Mockito.clearInvocations(artesaos);
+        for (String termo : List.of("MEMORIA", "heranca", "gerac", "vaso", "ceramica", "caruaru", "casa", "jarras")) {
+            assertThat(buscar(termo)).extracting(peca -> peca.get("slug")).containsExactly("vaso-do-sertao");
+        }
+        assertThat(requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", jwt,
+                Map.of("historia", List.of("Tradição renovada")), Map.class).getStatusCode().value()).isEqualTo(200);
+        assertThat(buscar("memoria")).isEmpty();
+        assertThat(buscar("TRADICAO")).hasSize(1);
+        assertThat(requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", jwt,
+                Map.of("historia", List.of()), Map.class).getStatusCode().value()).isEqualTo(200);
+        assertThat(buscar("tradicao")).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(artesaos);
+    }
+
+    @Test
+    void buscaTrataCuringasComoLiteraisEVazioComoListagem() {
+        persistir(peca("especial", "Coleção 50%_\\ especial", "100", "0", 1, "publicada"));
+        persistir(peca("comum", "Coleção comum", "100", "0", 2, "publicada"));
+        for (String termo : List.of("%", "_", "\\")) {
+            assertThat(buscar(termo)).extracting(peca -> peca.get("slug")).containsExactly("especial");
+        }
+        assertThat(buscar("termo-inexistente")).isEmpty();
+        assertThat(buscar("")).hasSize(2);
+        assertThat(buscar("   ")).hasSize(2);
+    }
+
+    private List<Map> buscar(String termo) {
+        var uri = java.net.URI.create("/api/v1/pecas?q=" + java.net.URLEncoder.encode(
+                termo, java.nio.charset.StandardCharsets.UTF_8));
+        var resposta = http.getForEntity(uri, Map.class);
+        assertThat(resposta.getStatusCode().value()).isEqualTo(200);
+        assertThat(resposta.getBody()).containsEntry("erro", null).containsKey("paginacao");
+        return (List<Map>) resposta.getBody().get("dados");
+    }
+
+    @Test
     void ordenaPeloPrecoComDesconto() {
         persistir(peca("preco-cheio", "Preço cheio", "80", "0", 1, "publicada"));
         persistir(peca("promocional", "Preço promocional", "100", "50", 2, "publicada"));
@@ -94,6 +147,35 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
 
         List<Map> dados = (List<Map>) resposta.getBody().get("dados");
         assertThat(dados.getFirst()).containsEntry("slug", "promocional");
+    }
+
+    @Test
+    void faixaDePrecoUsaPrecoFinalComDescontoEValidaLimites() {
+        persistir(peca("barata", "Barata", "40", "0", 1, "publicada"));
+        persistir(peca("promocional", "Promocional", "200", "50", 2, "publicada"));
+        persistir(peca("cara", "Cara", "300", "0", 3, "publicada"));
+
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMin=50&precoMax=100")).containsExactly("promocional");
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMin=100")).containsExactly("promocional", "cara");
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMax=99.99")).containsExactly("barata");
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMin=100&precoMax=100")).containsExactly("promocional");
+
+        for (var invalida : Map.of("precoMin=-1", "precoMin", "precoMax=-0.01", "precoMax",
+                "precoMin=200&precoMax=100", "precoMax").entrySet()) {
+            ResponseEntity<Map> resposta = http.getForEntity("/api/v1/pecas?" + invalida.getKey(), Map.class);
+            assertThat(resposta.getStatusCode().value()).isEqualTo(400);
+            assertThat(resposta.getBody()).containsEntry("dados", null);
+            assertThat((Map) resposta.getBody().get("erro")).containsEntry("codigo", "REQUISICAO_INVALIDA")
+                    .containsEntry("campo", invalida.getValue());
+        }
+        ResponseEntity<Map> malformada = http.getForEntity("/api/v1/pecas?precoMax=caro", Map.class);
+        assertThat(malformada.getStatusCode().value()).isEqualTo(400);
+    }
+
+    private List<String> slugsDaListagem(String caminho) {
+        ResponseEntity<Map> resposta = http.getForEntity(caminho, Map.class);
+        assertThat(resposta.getStatusCode().value()).isEqualTo(200);
+        return ((List<Map>) resposta.getBody().get("dados")).stream().map(peca -> (String) peca.get("slug")).toList();
     }
 
     @Test
@@ -182,6 +264,31 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     }
 
     @Test
+    void reativaPecaPropriaInativadaDeVoltaNaVitrine() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        String caminho = "/api/v1/pecas/vaso-do-sertao";
+        String reativacao = caminho + "/reativacao";
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, dados("publicada", 120), Map.class)
+                .getStatusCode().value()).isEqualTo(201);
+        assertThat(requisitar(HttpMethod.DELETE, caminho, jwt, null, Map.class).getStatusCode().value())
+                .isEqualTo(204);
+        assertThat(http.getForEntity(caminho, Map.class).getStatusCode().value()).isEqualTo(404);
+        assertThat(requisitar(HttpMethod.POST, reativacao, token(UUID.randomUUID(), "artesao"), null, Map.class)
+                .getStatusCode().value()).isEqualTo(404);
+        assertThat(requisitar(HttpMethod.POST, reativacao, token(UUID.randomUUID(), "comprador"), null, Map.class)
+                .getStatusCode().value()).isEqualTo(403);
+        var reativada = requisitar(HttpMethod.POST, reativacao, jwt, null, Map.class);
+        assertThat(reativada.getStatusCode().value()).isEqualTo(200);
+        assertThat((Map) reativada.getBody().get("dados")).containsEntry("inativadoEm", null);
+        assertThat(requisitar(HttpMethod.POST, reativacao, jwt, null, Map.class).getStatusCode().value())
+                .isEqualTo(200);
+        assertThat(http.getForEntity(caminho, Map.class).getStatusCode().value()).isEqualTo(200);
+    }
+
+    @Test
     void rascunhoNaoApareceEValidaPrecoPorCampo() {
         UUID dono = UUID.randomUUID();
         when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
@@ -211,6 +318,8 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
         assertThat((List<?>) http.getForEntity(lista, Map.class).getBody().get("dados")).isEmpty();
         var propria = requisitar(HttpMethod.GET, lista + "/painel", jwt, null, Map.class);
         assertThat((List<?>) propria.getBody().get("dados")).hasSize(1);
+        assertThat(((List<Map>) propria.getBody().get("dados")).getFirst())
+                .containsEntry("estadoVenda", "rascunho").doesNotContainKey("vendidaEmPedido");
         var alheia = requisitar(HttpMethod.GET, lista, token(outro, "artesao"), null, Map.class);
         assertThat((List<?>) alheia.getBody().get("dados")).isEmpty();
 
@@ -320,30 +429,96 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     }
 
     @Test
-    void guardaFotosNoBancoEServeCapaPelaUrlPublica() {
+    void guardaFotosNoObjectStorageEServeCapaPelaUrlPublica() {
         UUID dono = UUID.randomUUID();
         when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
                 .thenReturn("artesao-" + dono);
         var dados = new java.util.HashMap<String, Object>(dados("publicada", 100));
-        dados.put("fotos", List.of(Map.of("id", "foto-1", "nome", "capa.png",
-                "url", "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==")));
+        String dataUri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==";
+        dados.put("fotos", List.of(Map.of("id", "foto-1", "nome", "capa.png", "url", dataUri),
+                Map.of("id", "foto-2", "nome", "detalhe.png", "url", dataUri)));
+        byte[] conteudo = java.util.Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==");
+        org.mockito.Mockito.when(fotoStorage.obter(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(java.util.Optional.of(conteudo));
         var criada = requisitar(HttpMethod.POST, "/api/v1/pecas", token(dono, "artesao"), dados, Map.class);
         assertThat(criada.getStatusCode().value()).isEqualTo(201);
         var peca = (Map) criada.getBody().get("dados");
         var fotos = (List<Map>) peca.get("fotos");
-        assertThat(fotos).hasSize(1);
+        assertThat(fotos).extracting(foto -> foto.get("ordem")).containsExactly(0, 1);
         assertThat(peca).containsEntry("imagem", fotos.getFirst().get("url"));
         var arquivo = http.getForEntity((String) fotos.getFirst().get("url"), byte[].class);
         assertThat(arquivo.getStatusCode().value()).isEqualTo(200);
         assertThat(arquivo.getHeaders().getContentType()).isEqualTo(MediaType.IMAGE_PNG);
         assertThat(arquivo.getBody()).isNotEmpty();
+        var persistenciaFoto = jdbc.queryForMap("SELECT conteudo, storage_key FROM peca_fotos WHERE foto_id = ?", "foto-1");
+        assertThat(persistenciaFoto.get("conteudo")).isNull();
+        assertThat(persistenciaFoto.get("storage_key").toString()).startsWith("catalog/vaso-do-sertao/");
+        String chaveSubstituida = jdbc.queryForObject("SELECT storage_key FROM peca_fotos WHERE foto_id = ?", String.class, "foto-2");
+        org.mockito.Mockito.verify(fotoStorage, org.mockito.Mockito.times(2)).guardar(
+                org.mockito.ArgumentMatchers.contains("catalog/vaso-do-sertao/"),
+                org.mockito.ArgumentMatchers.eq("png"),
+                org.mockito.ArgumentMatchers.argThat(bytes -> java.util.Arrays.equals(bytes, conteudo)));
         var edicao = requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", token(dono, "artesao"),
                 Map.of("fotos", List.of(Map.of("id", "foto-1", "nome", "outra-capa.png",
                         "url", fotos.getFirst().get("url")))), Map.class);
         assertThat(edicao.getStatusCode().value()).isEqualTo(200);
         assertThat(((Map) edicao.getBody().get("dados")).get("imagem")).isEqualTo(fotos.getFirst().get("url"));
+        limpezaFotos.executar();
+        org.mockito.Mockito.verify(fotoStorage).remover(chaveSubstituida);
         assertThat(http.getForEntity((String) fotos.getFirst().get("url"), byte[].class).getStatusCode().value())
                 .isEqualTo(200);
+
+        String chaveStorage = persistenciaFoto.get("storage_key").toString();
+        assertThat(requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", token(dono, "artesao"),
+                Map.of("fotos", List.of()), Map.class).getStatusCode().value()).isEqualTo(200);
+        assertThat(http.getForEntity((String) fotos.getFirst().get("url"), byte[].class).getStatusCode().value())
+                .isEqualTo(404);
+        limpezaFotos.executar();
+        org.mockito.Mockito.verify(fotoStorage).remover(chaveStorage);
+    }
+
+    @Test
+    void preservaFilaDeLimpezaSeStorageFalhaERepeteAposRecuperacao() {
+        String chave = "catalog/diagnostico/orfa.png";
+        limpezaFotos.agendar(chave);
+        org.mockito.Mockito.doThrow(new br.com.balaio.catalog.peca.application.FotoStorageIndisponivelException())
+                .doNothing().when(fotoStorage).remover(chave);
+        limpezaFotos.executar();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM limpeza_fotos_storage", Integer.class)).isEqualTo(1);
+        limpezaFotos.executar();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM limpeza_fotos_storage", Integer.class)).isZero();
+    }
+
+    @Test
+    void recusaFormatoTamanhoEQuantidadeDeFotosForaDoLimite() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        String png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==";
+
+        var formatoInvalido = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        formatoInvalido.put("fotos", List.of(Map.of("id", "gif", "nome", "foto.gif",
+                "url", "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==")));
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, formatoInvalido, Map.class)
+                .getStatusCode().value()).isEqualTo(400);
+
+        var quantidadeInvalida = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        quantidadeInvalida.put("fotos", java.util.stream.IntStream.range(0, 6)
+                .mapToObj(indice -> Map.of("id", "foto-" + indice, "nome", "foto.png", "url", png)).toList());
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, quantidadeInvalida, Map.class)
+                .getStatusCode().value()).isEqualTo(400);
+
+        byte[] grande = new byte[5 * 1024 * 1024 + 1];
+        byte[] assinaturaPng = new byte[] {(byte) 137, 80, 78, 71, 13, 10, 26, 10, 0};
+        System.arraycopy(assinaturaPng, 0, grande, 0, assinaturaPng.length);
+        var tamanhoInvalido = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        tamanhoInvalido.put("fotos", List.of(Map.of("id", "grande", "nome", "grande.png",
+                "url", "data:image/png;base64," + java.util.Base64.getEncoder().encodeToString(grande))));
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, tamanhoInvalido, Map.class)
+                .getStatusCode().value()).isEqualTo(400);
+        org.mockito.Mockito.verifyNoInteractions(fotoStorage);
     }
 
     @Test
@@ -579,11 +754,16 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
                 "/api/v1/artesaos/artesao-" + dono + "/pecas", jwt, null, Map.class);
         assertThat((List<Map>) publicaMesmoAutenticada.getBody().get("dados"))
                 .noneSatisfy(peca -> assertThat(peca.get("inativadoEm")).isNotNull());
-        for (String outroToken : List.of(token(UUID.randomUUID(), "artesao"), token(dono, "comprador"))) {
+        for (String outroToken : List.of(token(UUID.randomUUID(), "artesao"), token(dono, "comprador"),
+                token(dono, "admin"))) {
             assertThat(requisitar(HttpMethod.GET, painel, outroToken, null, Map.class)
                     .getStatusCode().value()).isEqualTo(403);
         }
-        assertThat(http.getForEntity(painel, Map.class).getStatusCode().value()).isEqualTo(403);
+        assertThat(http.getForEntity(painel, Map.class).getStatusCode().value()).isEqualTo(401);
+        assertThat(requisitar(HttpMethod.HEAD, painel, null, null, Map.class).getStatusCode().value()).isEqualTo(401);
+        assertThat(requisitar(HttpMethod.HEAD, painel, token(UUID.randomUUID(), "artesao"), null, Map.class)
+                .getStatusCode().value()).isEqualTo(403);
+        assertThat(requisitar(HttpMethod.HEAD, painel, jwt, null, Map.class).getStatusCode().value()).isEqualTo(200);
         assertThat(requisitar(HttpMethod.PATCH, caminho, jwt, Map.of("disponibilidade", "disponivel"), Map.class)
                 .getStatusCode().value()).isEqualTo(409);
     }

@@ -7,4 +7,5 @@ import br.com.balaio.catalog.peca.domain.Peca;
 public interface AtualizarPecaUseCase {
     Peca atualizar(String slug, DadosPeca alteracoes, UUID contaId);
     Peca inativar(String slug, UUID contaId);
+    Peca reativar(String slug, UUID contaId);
 }

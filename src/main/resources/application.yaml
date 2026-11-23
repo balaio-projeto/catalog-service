@@ -25,6 +25,13 @@ balaio:
   internal:
     token: ${BALAIO_INTERNAL_TOKEN:}
   catalog:
+    storage:
+      enabled: ${CATALOG_S3_ENABLED:false}
+      endpoint: ${CATALOG_S3_ENDPOINT:http://localhost:8333}
+      region: ${CATALOG_S3_REGION:us-east-1}
+      bucket: ${CATALOG_S3_BUCKET:balaio-media}
+      access-key: ${CATALOG_S3_ACCESS_KEY_ID:}
+      secret-key: ${CATALOG_S3_SECRET_ACCESS_KEY:}
     jwt:
       public-key-location: ${JWT_PUBLIC_KEY_LOCATION:}
       issuer: ${JWT_ISSUER:}

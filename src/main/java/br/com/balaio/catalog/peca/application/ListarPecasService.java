@@ -19,6 +19,7 @@ public class ListarPecasService implements ListarPecasUseCase {
     @Override
     public PaginaPecas listar(FiltroCatalogo filtro, Integer paginaSolicitada, Integer tamanhoSolicitado,
             OrdenacaoCatalogo ordenacao) {
+        validarFaixaDePreco(filtro);
         long total = consultarPecas.contar(filtro);
         int tamanho = resolverTamanho(tamanhoSolicitado, total);
         int totalPaginas = Math.max(1, (int) ((total + tamanho - 1) / tamanho));
@@ -26,6 +27,16 @@ public class ListarPecasService implements ListarPecasUseCase {
 
         var pecas = consultarPecas.buscar(filtro, pagina - 1, tamanho, ordenacao);
         return new PaginaPecas(pecas, pagina, tamanho, total, totalPaginas);
+    }
+
+    private void validarFaixaDePreco(FiltroCatalogo filtro) {
+        if (filtro.precoMin() != null && filtro.precoMin().signum() < 0)
+            throw ErroPecaException.invalido("precoMin", "O preço mínimo não pode ser negativo.");
+        if (filtro.precoMax() != null && filtro.precoMax().signum() < 0)
+            throw ErroPecaException.invalido("precoMax", "O preço máximo não pode ser negativo.");
+        if (filtro.precoMin() != null && filtro.precoMax() != null
+                && filtro.precoMin().compareTo(filtro.precoMax()) > 0)
+            throw ErroPecaException.invalido("precoMax", "O preço máximo deve ser maior ou igual ao mínimo.");
     }
 
     private int resolverTamanho(Integer tamanhoSolicitado, long total) {

@@ -1,14 +1,25 @@
 # catalog-service
 
-## Reserva interna de peça única (PI-190)
+## Reserva interna de peça única (PI-190 / PI-243)
 
-O catálogo é a autoridade da disponibilidade. `POST /internal/v1/reservas` recebe `{pedidoId,slug,chave}` e devolve `{dados:{id,pedidoId,slug,estado,expiraEm,preco,artesao,proprietarioId},erro:null}`. Preço e proprietário são registrados na reserva e permanecem estáveis nos replays. A chave de criação é estável por pedido e peça. A mesma chamada devolve a reserva ativa existente; pedido ou chave diferente recebe conflito. A reserva dura 15 minutos e retira a peça única da listagem. Peças de encomenda não usam esta operação.
+O catálogo é a autoridade da disponibilidade. `POST /internal/v1/reservas` recebe `{pedidoId,slug,chave}` e devolve `{dados:{id,pedidoId,slug,estado,expiraEm,preco,artesao,proprietarioId},erro:null}`. Preço e proprietário são registrados na reserva e permanecem estáveis nos replays. A chave de criação é estável por pedido e peça. A mesma chamada devolve a reserva existente inclusive depois de liberada ou expirada, permitindo recuperar o ID e o resultado após resposta perdida; pedido ou chave diferente recebe conflito. A reserva dura 15 minutos e retira a peça única da listagem. Peças de encomenda não usam esta operação.
 
 Após confirmação confiável do pagamento pelo commerce, `POST /internal/v1/reservas/{id}/confirmar` recebe `{pedidoId,chave:"confirmar:<id>"}` e muda a reserva para `CONSUMIDA`. Uma reserva consumida não expira e mantém a peça indisponível; a repetição devolve o resultado persistido. Uma reserva já vencida não pode ser confirmada. `POST /internal/v1/reservas/{id}/liberar` recebe `{pedidoId,chave:"liberar:<id>"}` e libera tanto uma reserva aguardando pagamento quanto uma consumida após cancelamento/reembolso. A repetição devolve o resultado persistido. Uma liberação tardia de reserva expirada ou já liberada não toca numa reserva posterior da mesma peça. `GET /internal/v1/reservas/{id}` exige o cabeçalho `X-Balaio-Pedido-Id` e permite reconciliação pelo commerce. O processo de expiração libera reservas não consumidas vencidas em intervalos de um minuto; a criação também trata uma reserva vencida antes de tentar reservar novamente.
 
-As três rotas exigem `X-Balaio-Service-Token` com o valor de `BALAIO_INTERNAL_TOKEN`, configurado fora do Git com pelo menos 32 caracteres. Sem esse segredo configurado, as rotas internas recusam chamadas. Elas não são encaminhadas pelo Gateway. O banco do commerce nunca deve atualizar a tabela `pecas` diretamente.
+Todas as rotas internas exigem `X-Balaio-Service-Token` com o valor de `BALAIO_INTERNAL_TOKEN`, configurado fora do Git com pelo menos 32 caracteres. Sem esse segredo configurado, as rotas internas recusam chamadas. Elas não são encaminhadas pelo Gateway. O banco do commerce nunca deve atualizar a tabela `pecas` diretamente.
 
 Enquanto uma peça está inativada por reserva, o PATCH do artesão retorna 409; ele usa o mesmo bloqueio de linha que as operações de reserva e liberação. Assim, uma edição concorrente não altera preço, situação ou disponibilidade de uma peça reservada.
+
+### Garantias da reserva atômica (PI-243)
+
+- A criação bloqueia a chave idempotente por advisory lock transacional e a peça por `SELECT ... FOR UPDATE`. O índice único parcial permite somente uma reserva RESERVADA/CONSUMIDA por peça. A reserva e a retirada da vitrine são gravadas na mesma transação do catálogo.
+- Pedidos concorrentes para a mesma peça produzem um 201 e um 409. Requisições simultâneas com o mesmo pedido, slug e chave retornam 201 com o mesmo identificador, preço e vencimento, sem duplicar a reserva ou renovar seu prazo.
+- A chave é vinculada ao pedido e ao slug: reutilizá-la para outra peça ou pedido retorna 409 `RESERVA_CONFLITANTE`, inclusive sob concorrência. O commerce usa `reservar:<pedidoId>:<slug>` e deve preservá-la ao repetir uma chamada após timeout.
+- Uma reserva LIBERADA/EXPIRADA não é recriada pelo replay do pedido/chave antigos: o replay devolve a mesma reserva com o estado persistido (`LIBERADA`/`EXPIRADA`), sem renovar prazo nem retirar a peça da vitrine, e o commerce recusa qualquer estado diferente de `RESERVADA`/`CONSUMIDA` ao reservar. Um novo pedido pode reservar após liberação ou expiração. Uma criação válida de outro pedido expira a reserva vencida da peça na própria transação, sem aguardar o agendador.
+- `encomenda` e `disponivel` retornam 409 `RESERVA_NAO_APLICAVEL`, sem criar reserva ou inativar a peça. O commerce segue o fluxo de encomenda sem invocar a reserva exclusiva; consultar cotação não reserva a peça.
+- Slug inexistente retorna 404; peça única não pública/inativa retorna 409; comando sem pedido, slug ou chave válidos retorna 400. Os erros preservam `{dados:null,erro:{codigo,mensagem}}`.
+
+Os cenários de concorrência, idempotência, expiração, liberação e compatibilidade com o painel são exercitados por `ReservasPostgresTest` com PostgreSQL real em Testcontainers. Habilite `CATALOG_POSTGRES_TEST=true` antes de executar `mvn test`; sem a variável, essa classe é ignorada. A validação completa de pagamento/frete pertence à PI-190 e não é substituída pelos testes da reserva.
 
 Serviço responsável pelos dados e pela persistência do catálogo de peças. O frontend chama a API pelo api-gateway.
 
@@ -16,7 +27,7 @@ Serviço responsável pelos dados e pela persistência do catálogo de peças. O
 
 - GET /api/v1/pecas: consulta pública de peças publicadas e ativas.
 - Busca textual sem diferença entre maiúsculas e minúsculas ou acentos.
-- Filtros por técnica, território, categoria, tipo, disponibilidade e desconto.
+- Filtros por técnica, território, categoria, tipo, disponibilidade, desconto e faixa de preço final (`precoMin`/`precoMax`).
 - Ordenação por preço final com desconto, avaliação ou ordem de publicação.
 - Paginação no envelope compatível com a Fake API: dados, erro e paginacao.
 - Flyway cria a tabela e carrega as 24 peças do seed atual do frontend.
@@ -25,11 +36,12 @@ Serviço responsável pelos dados e pela persistência do catálogo de peças. O
 - Fotos ordenadas em `peca_fotos` no PostgreSQL, servidas em GET /api/v1/arquivos/pecas/{nome}.
 - GET /api/v1/referencias: listas públicas de técnicas, territórios, categorias, tipos e etiquetas aceitas pelo formulário.
 - GET /api/v1/pecas/{slug}: detalhe público de peça publicada e ativa; o dono autenticado também pode ler seu rascunho.
-- GET /api/v1/artesaos/{slug}/pecas: listagem pública de peças publicadas e ativas; o dono autenticado com slug `artesao-<UUID>` também vê seus rascunhos.
+- GET /api/v1/artesaos/{slug}/pecas: listagem pública de peças publicadas e ativas, inclusive quando consultada pelo proprietário autenticado.
+- GET /api/v1/artesaos/{slug}/pecas/painel: listagem privada das peças do artesão responsável, incluindo rascunhos, inativadas, reservadas e vendidas.
 
 ## Contrato
 
-Parâmetros opcionais: q, tecnica, territorio, categoria, tipo, disponibilidade, desconto, ordenar, pagina e tamanho.
+Parâmetros opcionais: q, tecnica, territorio, categoria, tipo, disponibilidade, desconto, precoMin, precoMax, ordenar, pagina e tamanho.
 
 Valores de ordenar: preco-asc, preco-desc, avaliacao e recentes. O filtro desconto=true mostra só peças com desconto. Sem tamanho, a API devolve todos os resultados até 100; valores maiores também são limitados a 100. A página pedida é ajustada para o intervalo existente.
 
@@ -44,6 +56,58 @@ A resposta contém dados como lista de peças, erro como null e paginacao com pa
 `q` pesquisa por correspondência parcial, sem diferenciar maiúsculas/minúsculas nem acentos. Os campos pesquisados são nome, história, categoria, técnica, tipo e território. O texto indexável é normalizado e persistido na coluna `texto_busca`; o nome do artesão não é pesquisado, pois essa coluna contém atualmente apenas o slug/identificador do ateliê e não há projeção local do nome do perfil. Busca vazia ou em branco equivale à listagem sem termo. Caracteres `%`, `_` e `\` são tratados literalmente. A visibilidade (publicada e sem `inativado_em`) é a mesma das demais listagens públicas.
 
 Uma futura busca por nome de artesão exige uma projeção local sincronizada por API ou eventos, com política de atualização e consistência definida; o catálogo não consulta diretamente o banco do profile-service.
+
+### Busca textual (PI-179)
+
+Criação e edição recompõem `texto_busca` com nome, slug do artesão, território, técnica, categoria, tipo e todos os parágrafos da história, na ordem persistida. A busca continua parcial, sem diferença de caixa ou acentos; não é pesquisa por palavras independentes nem por relevância. Materiais não fazem parte dos campos pesquisáveis deste contrato.
+
+A migration Java `V9__reindexar_texto_busca_pecas` reconstrói o texto das peças existentes usando normalização Unicode NFD e `Locale.ROOT`, como a aplicação, sem exigir extensão PostgreSQL. Ela altera somente `texto_busca`: preserva conteúdo, autoria, preço e visibilidade. Valores de nomes de perfil embutidos no seed antigo deixam de compor a busca; permanece o slug persistido no catálogo. A V2 aplicada não foi editada. A V9 roda transacionalmente e faz atualizações em lotes de 200; em uma base maior, planeje a aplicação considerando o volume de escrita e bloqueio dos registros.
+
+A consulta pública continua excluindo rascunhos e peças inativas/reservadas/vendidas. Termo vazio ou em branco mantém a listagem; ausência de resultados retorna 200 com `dados: []` e metadados de paginação. `%`, `_` e `\` são literais, não curingas. A aplicação não chama o profile-service para buscar peças.
+
+Os testes verificam campos, acentos, caixa, termos parciais, caracteres literais, ausência de resultado e atualização/remoção da história. Com `CATALOG_POSTGRES_TEST=true`, também verificam o fluxo HTTP em PostgreSQL, visibilidade após edição/inativação e atualização de uma base V8 para V9. A normalização versionada da migration é independente das entidades atuais para preservar sua execução futura.
+
+O contrato segue `GET /api/v1/pecas?q=` e compõe os filtros/paginação existentes. Nenhuma alteração no frontend é necessária para o parâmetro `q`; a UI ainda não deve prometer busca por nome de artesão. Não foi adicionado índice B-tree em `texto_busca`, pois ele não resolve o padrão `%termo%`; índices especializados exigem medição e decisão própria, sem introduzir Redis nesta entrega.
+
+### Filtros, ordenação e paginação (PI-180)
+
+Todos os filtros se combinam por interseção no PostgreSQL, com as mesmas condições na contagem e na consulta paginada. `tecnica`, `territorio`, `categoria`, `tipo` e `disponibilidade` comparam o valor exato persistido; valores omitidos ou em branco não restringem a consulta. Valor desconhecido retorna lista vazia. Somente `desconto=true` exige desconto positivo; `false` não significa "sem desconto", apenas não aplica esse filtro. Rascunhos e peças inativadas ficam fora de todos os resultados públicos.
+
+| `ordenar` | Critério | Desempate |
+| --- | --- | --- |
+| Omitido ou desconhecido | Ordem do catálogo crescente | A ordem é única. |
+| `recentes` | Ordem do catálogo decrescente | A ordem é única; não se baseia no momento da última edição. |
+| `preco-asc` / `preco-desc` | Preço final após desconto, crescente/decrescente | Ordem do catálogo crescente. |
+| `avaliacao` | Avaliação decrescente, valores ausentes no final | Ordem do catálogo crescente. |
+
+O desempate mantém peças com preços iguais em ordem determinística entre páginas, enquanto os dados não mudarem. A paginação não mantém um snapshot entre requisições distintas: publicações/edições podem mudar o conjunto retornado.
+
+O envelope contém `pagina`, `tamanho`, `total` e `totalPaginas`. `pagina` omitida, zero ou negativa resulta em 1; acima da última página é ajustada para a última. `tamanho` omitido ou zero usa o total filtrado entre 1 e 100; negativo é ajustado para 1 e acima de 100 para 100. Sem resultados, `pagina=1`, `total=0`, `totalPaginas=1`, preservando o tamanho solicitado após seus limites. Sem tamanho informado, a lista vazia usa `tamanho=1`. Esses ajustes preservam o comportamento existente; não são erros de validação. Números ou booleanos malformados retornam 400 `REQUISICAO_INVALIDA` no envelope padrão.
+
+`FiltrosPaginacaoPostgresTest`, habilitado por `CATALOG_POSTGRES_TEST=true`, verifica interseção de todos os filtros, visibilidade, ordenações e desempates, avaliação ausente, limites de página, teto de 100 e parâmetros inválidos. Não há consulta a outro serviço nem necessidade de Redis.
+
+### Faixa de preço (PI-31)
+
+`precoMin` e `precoMax` são uma extensão do contrato acordada com o frontend (filtro de faixa da tela `/search`). Ambos são opcionais, decimais em reais, inclusivos e comparados com o preço final após desconto, o mesmo critério de `preco-asc`/`preco-desc`. Combinam por interseção com os demais filtros, entram na contagem e na paginação e mantêm a visibilidade pública. Valor negativo retorna 400 `REQUISICAO_INVALIDA` com `campo` igual ao parâmetro; `precoMin` maior que `precoMax` retorna 400 com `campo: "precoMax"`; texto não numérico retorna 400 no envelope padrão. O frontend nunca envia faixa invertida: ele troca os valores ao ler a URL. Cobertura: `PecasControllerIntegrationTest.faixaDePrecoUsaPrecoFinalComDescontoEValidaLimites` e `FiltrosPaginacaoPostgresTest.faixaDePrecoFiltraPeloPrecoFinalCombinandoComFiltrosEPaginacao`.
+
+### Desempenho da vitrine e decisão sobre cache (PI-178)
+
+Meta adotada, já que o card não fixa um número: p95 de `GET /api/v1/pecas` até **300 ms pelo gateway** na pilha local. Redis só seria proposto se uma medição reproduzível ficasse acima dela depois de avaliar consulta, índice e paginação.
+
+Medição de 22/11/2026, pilha `balaio-local` (Docker Desktop no Windows, catálogo com 27 peças públicas), 300 requisições sequenciais por cenário após 20 de aquecimento, cronometradas no host:
+
+| Origem | Cenário | Itens | p50 | p95 | p99 |
+| --- | --- | --- | --- | --- | --- |
+| gateway | `GET /api/v1/pecas` (home, até 100) | 27 | 13,6 ms | 31,5 ms | 37,4 ms |
+| gateway | `?tamanho=12&ordenar=recentes` | 12 | 10,0 ms | 27,0 ms | 32,5 ms |
+| gateway | `?q=barro&categoria=Casa & Mesa&tamanho=12` | 8 | 10,0 ms | 24,4 ms | 32,5 ms |
+| gateway | `?precoMin=50&precoMax=500&ordenar=preco-asc&tamanho=12` | 12 | 11,8 ms | 24,4 ms | 34,9 ms |
+| catalog direto | home | 27 | 10,3 ms | 31,9 ms | 36,0 ms |
+| catalog direto | faixa de preço | 12 | 8,6 ms | 18,9 ms | 31,9 ms |
+
+Para antecipar crescimento, a tabela `pecas` foi copiada para um PostgreSQL 18 descartável e ampliada para 21.030 peças (18.927 públicas). Tempo de execução das consultas equivalentes às do serviço (`EXPLAIN ANALYZE`, 30 execuções cada): contagem pública p95 11 ms; primeira página e página 11 ordenadas por `ordem_catalogo` p95 0,24 ms (índice único); busca `%barro%` + categoria p95 25 ms (contagem) e 27 ms (página); faixa de preço p95 19 ms (contagem) e 44 ms (página ordenada por preço final, com varredura sequencial).
+
+Decisão: **cache não é necessário nesta etapa**. O p95 atual fica cerca de 10 vezes abaixo da meta e, mesmo com volume ~700 vezes maior, a soma de contagem e página fica abaixo de 100 ms. Redis não foi adicionado ao Compose nem como dependência. Se o catálogo crescer a ponto de a busca por texto ou a faixa de preço passarem da meta, o próximo passo é índice (trigrama em `texto_busca` ou índice de expressão no preço final), ainda sem cache. Para repetir a medição, use o mesmo roteiro: N requisições sequenciais a `GET /api/v1/pecas` pelo gateway, calculando p50/p95/p99.
 
 ### Escrita
 
@@ -85,8 +149,13 @@ Requer JDK 25, PostgreSQL e o banco balaio_catalog criado antes da primeira inic
 | JWT_PUBLIC_KEY_LOCATION | caminho `file:` para chave pública RSA PEM correspondente à chave privada do profile-service (obrigatório) |
 | JWT_ISSUER / JWT_AUDIENCE | mesmos valores configurados no profile-service (obrigatórios) |
 | PROFILE_SERVICE_URL | http://localhost:8082 |
+| CATALOG_S3_ENABLED | `false`; defina `true` para habilitar fotos em storage S3 compatível |
+| CATALOG_S3_ENDPOINT / CATALOG_S3_REGION / CATALOG_S3_BUCKET | `http://localhost:8333` / `us-east-1` / `balaio-media` |
+| CATALOG_S3_ACCESS_KEY_ID / CATALOG_S3_SECRET_ACCESS_KEY | Credenciais externas de identidade própria do catálogo; não use a identidade administrativa do SeaweedFS |
 
 No Windows, use .\mvnw.cmd spring-boot:run e .\mvnw.cmd test. Em Linux/macOS, use ./mvnw spring-boot:run e ./mvnw test.
+
+Os testes com PostgreSQL real (`FiltrosPaginacaoPostgresTest`, `PecasPostgresConcurrencyTest` e `ReservasPostgresTest`) só rodam com `CATALOG_POSTGRES_TEST=true`. Por padrão eles sobem `postgres:18-alpine` por Testcontainers. Com `CATALOG_POSTGRES_TEST_DB=externo`, usam o banco indicado em `CATALOG_DB_URL`/`CATALOG_DB_USERNAME`/`CATALOG_DB_PASSWORD`; use um banco descartável, pois os testes inserem e alteram peças e reservas. O CI (`.github/workflows/ci.yml`) roda `./mvnw -B verify` com um service `postgres:18-alpine` nesse modo, então a suíte inteira, inclusive a de reservas, roda a cada push e pull request.
 
 - Swagger UI: http://localhost:8081/swagger-ui.html
 - OpenAPI JSON: http://localhost:8081/v3/api-docs
@@ -107,13 +176,33 @@ A busca aplica o limite no banco sem contagem de paginação.
 
 A mudança de condição usa o PATCH existente, identificado pelo proprietário persistido e pelo JWT, sem chamar o profile-service. Publicação `encomenda` exige prazo inteiro de 1 a 120 dias; a exceção de rascunho sem prazo é preservada. O mesmo bloqueio de linha serializa edição, reserva e liberação. Edição é recusada enquanto houver inativação ou reserva RESERVADA/CONSUMIDA, inclusive alteração de preço, disponibilidade ou situação.
 
-Na rota existente `GET /api/v1/artesaos/{slug}/pecas`, apenas o proprietário com slug `artesao-<sub>` recebe as peças do painel com `estadoVenda`: disponivel, rascunho, inativada, reservada ou vendida. `inativadoEm` é retornado no objeto da peça; `vendidaEmPedido` aparece apenas na lista do dono quando a reserva está CONSUMIDA. A condição `disponibilidade` continua sendo disponivel/encomenda/unica e não é sobrescrita para representar venda. Liberação/expiração usam o estado persistido pelo fluxo de reservas existente; não há reativação antecipada pela leitura.
+Na rota privada `GET /api/v1/artesaos/{slug}/pecas/painel`, apenas o artesão proprietário com slug `artesao-<sub>` recebe as peças do painel com `estadoVenda`: disponivel, rascunho, inativada, reservada ou vendida. `inativadoEm` é retornado no objeto da peça; `vendidaEmPedido` aparece apenas na lista do dono quando a reserva está CONSUMIDA. A condição `disponibilidade` continua sendo disponivel/encomenda/unica e não é sobrescrita para representar venda. Liberação/expiração usam o estado persistido pelo fluxo de reservas existente; não há reativação antecipada pela leitura.
 
-O painel consulta as reservas do proprietário em lote e lê peças e reservas em transação REPEATABLE_READ, evitando estados de instantes distintos. Público e outros artesãos continuam com a listagem pública, sem os dados privados da reserva. Nenhuma rota, resumo de métricas ou integração da PI-247 foi adicionada. Não é necessária migration de produção: os dados já existem em pecas e reservas_peca.
+O painel consulta as reservas do proprietário em lote e lê peças e reservas em transação REPEATABLE_READ, evitando estados de instantes distintos. A rota pública permanece sem os dados privados da reserva. O gateway encaminha a rota privada e exige papel artesao, tanto em GET quanto em HEAD; o catálogo também exige JWT válido e verifica a posse. Sem autenticação a resposta é 401; papel incorreto ou slug de outro artesão retorna 403. Não há consulta ao profile-service nesse fluxo.
+
+### Contrato para a próxima integração do frontend
+
+- Consultar `/api/v1/artesaos/artesao-<sub>/pecas/painel` pelo gateway, com sessão ou Bearer, usando o envelope `{dados: [...], erro: null, paginacao: null}`. A lista privada não é paginada.
+- Usar `estadoVenda` para os estados do painel e `vendidaEmPedido` somente como referência da venda; não inferir reserva/venda a partir da lista de pedidos. Peças reservadas e vendidas recusam edição com 409.
+- Alterar condição por `PATCH /api/v1/pecas/{slug}`, por exemplo `{"disponibilidade":"encomenda","prazoProducaoDias":10}`. Encomenda publicada sem prazo retorna 400 com campo `prazoProducaoDias`; rascunho pode omiti-lo conforme o contrato de escrita existente. Ao sair de encomenda, o prazo é removido.
+- Inativar por DELETE; `inativadoEm` é protegido no PATCH. Não há comando de reativação neste contrato.
+- Manter `/api/v1/artesaos/{slug}/pecas` nas telas públicas; autenticar nessa rota não a transforma em painel.
+
+O frontend ainda precisa migrar para a rota privada. Nenhum resumo de métricas ou integração da PI-247 foi adicionado. Não é necessária migration de produção: os dados já existem em pecas e reservas_peca.
 
 ## Ainda pendente em outras histórias
 
 Cadastro completo de ateliê e sincronização dos dados de perfil.
+
+## Fotos de peças (PI-175)
+
+Contrato, execução e evidências estão em [docs/PI-175-fotos.md](docs/PI-175-fotos.md).
+As migrations V10/V11 externalizam os novos binários e criam a fila persistente
+de limpeza; falhas S3 retornam 503 no envelope padrão e as exclusões têm retry.
+
+O cadastro e a edição recebem `fotos` no contrato JSON existente. Para uma foto nova, `url` contém uma data URI `data:image/(jpeg|png|webp);base64,...`; o catálogo valida assinatura e tamanho (até 5 MiB), guarda o binário no bucket privado `balaio-media` sob `catalog/` e persiste no PostgreSQL apenas metadados e `storage_key`. Fotos existentes podem ser mantidas e a ordem enviada é persistida. `GET /api/v1/arquivos/pecas/{uuid}.{jpg|png|webp}` entrega a imagem através do catalog-service/gateway; não há acesso direto do navegador ao storage.
+
+No Compose, habilite `CATALOG_S3_ENABLED=true` e forneça `CATALOG_S3_ACCESS_KEY_ID` / `CATALOG_S3_SECRET_ACCESS_KEY` fora do repositório. A identidade `balaio-catalog`, provisionada por `platform/storage/scripts/prepare-local-storage.ps1` (chamado pelo `start-local.ps1`), tem somente `GetObject`/`PutObject`/`DeleteObject` em `balaio-media/catalog/*` e nenhum acesso aos demais prefixos. O `platform/docker-compose.storage.yml` já entrega `CATALOG_S3_ENABLED=true` e o par ao catálogo. O provisionamento e os testes de isolamento estão em `platform/storage/docs/storage-local.md` e `platform/storage/scripts/test-catalog-storage.ps1`. Não reutilize `balaio-local-admin`. O padrão desabilitado mantém a inicialização local sem storage e sem afetar URLs de fotos dos dados demonstrativos. A coluna `conteudo` permanece somente para leitura/migração de fotos legadas; ao salvar uma peça com foto legada, ela é migrada para o storage configurado.
 
 ## Referências e histórico (PI-215)
 
