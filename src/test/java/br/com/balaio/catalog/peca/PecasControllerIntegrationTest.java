@@ -304,6 +304,85 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
     }
 
     @Test
+    void criaComDescontoEEditaDescontoRefletindoEmOfertasEPrecoFinal() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        var comDesconto = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        comDesconto.put("desconto", 15);
+        var criada = requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, comDesconto, Map.class);
+        assertThat(criada.getStatusCode().value()).isEqualTo(201);
+        assertThat(descontoDe((Map) criada.getBody().get("dados"))).isEqualByComparingTo("15");
+        assertThat(slugsDaListagem("/api/v1/pecas?desconto=true")).containsExactly("vaso-do-sertao");
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMin=85&precoMax=85")).containsExactly("vaso-do-sertao");
+
+        var editada = requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", jwt,
+                Map.of("desconto", 12.5), Map.class);
+        assertThat(editada.getStatusCode().value()).isEqualTo(200);
+        assertThat(descontoDe((Map) editada.getBody().get("dados"))).isEqualByComparingTo("12.5");
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMin=87.5&precoMax=87.5")).containsExactly("vaso-do-sertao");
+
+        var semTocarNoDesconto = requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", jwt,
+                Map.of("nome", "Vaso renomeado"), Map.class);
+        assertThat(descontoDe((Map) semTocarNoDesconto.getBody().get("dados"))).isEqualByComparingTo("12.5");
+
+        var zerada = requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", jwt, Map.of("desconto", 0), Map.class);
+        assertThat(descontoDe((Map) zerada.getBody().get("dados"))).isEqualByComparingTo("0");
+        assertThat(slugsDaListagem("/api/v1/pecas?desconto=true")).isEmpty();
+
+        var semDesconto = requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, dados("publicada", 100), Map.class);
+        assertThat(descontoDe((Map) semDesconto.getBody().get("dados"))).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void recusaDescontoForaDaFaixaComMaisDeDuasCasasOuQueZeraOPreco() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        for (Object invalido : List.of(-1, 90.01, 100, 10.555, "muito")) {
+            var payload = new java.util.HashMap<String, Object>(dados("publicada", 100));
+            payload.put("desconto", invalido);
+            var resposta = requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, payload, Map.class);
+            assertThat(resposta.getStatusCode().value()).as("desconto %s", invalido).isEqualTo(400);
+            assertThat((Map) resposta.getBody().get("erro")).containsEntry("codigo", "REQUISICAO_INVALIDA")
+                    .containsEntry("campo", "desconto");
+        }
+        assertThat(slugsDaListagem("/api/v1/pecas")).isEmpty();
+
+        var precoMinimo = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        precoMinimo.put("preco", 0.01);
+        precoMinimo.put("desconto", 60);
+        var zeraPreco = requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, precoMinimo, Map.class);
+        assertThat(zeraPreco.getStatusCode().value()).isEqualTo(400);
+        assertThat((Map) zeraPreco.getBody().get("erro")).containsEntry("campo", "desconto");
+
+        var noLimite = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        noLimite.put("desconto", 90);
+        assertThat(requisitar(HttpMethod.POST, "/api/v1/pecas", jwt, noLimite, Map.class).getStatusCode().value())
+                .isEqualTo(201);
+        var acimaDoLimite = requisitar(HttpMethod.PATCH, "/api/v1/pecas/vaso-do-sertao", jwt,
+                Map.of("desconto", 95), Map.class);
+        assertThat(acimaDoLimite.getStatusCode().value()).isEqualTo(400);
+        assertThat((Map) acimaDoLimite.getBody().get("erro")).containsEntry("campo", "desconto");
+        var mantida = requisitar(HttpMethod.GET, "/api/v1/pecas/vaso-do-sertao", jwt, null, Map.class);
+        assertThat(descontoDe((Map) mantida.getBody().get("dados"))).isEqualByComparingTo("90");
+    }
+
+    @Test
+    void faixaDePrecoUsaPrecoFinalArredondadoComoNaReserva() {
+        persistir(peca("quebrada", "Quebrada", "99.99", "15", 1, "publicada"));
+
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMin=84.99&precoMax=84.99")).containsExactly("quebrada");
+        assertThat(slugsDaListagem("/api/v1/pecas?precoMin=85")).isEmpty();
+    }
+
+    private BigDecimal descontoDe(Map peca) {
+        return new BigDecimal(String.valueOf(peca.get("desconto")));
+    }
+
+    @Test
     void fluxoCriacaoListagemDetalheEEdicaoRespeitaVisibilidade() {
         UUID dono = UUID.randomUUID();
         UUID outro = UUID.randomUUID();

@@ -1,6 +1,7 @@
 package br.com.balaio.catalog.peca.application;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.text.Normalizer;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -28,6 +29,9 @@ import br.com.balaio.catalog.peca.application.port.out.ConsultarReferenciasPort;
 public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCase {
     private static final Pattern DATA_URI = Pattern.compile("^data:image/(jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$");
     private static final Pattern URL_FOTO = Pattern.compile("^/api/v1/arquivos/pecas/[0-9a-f-]{36}\\.(jpg|png|webp)$");
+    private static final BigDecimal DESCONTO_MAXIMO = new BigDecimal("90");
+    private static final BigDecimal CEM = new BigDecimal("100");
+    private static final BigDecimal MENOR_PRECO_PUBLICADO = new BigDecimal("0.01");
     private final GerenciarPecasPort pecas;
     private final ResolverArtesaoPort artesaos;
     private final ConsultarReferenciasPort referencias;
@@ -53,7 +57,7 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
         int ordem = pecas.proximaOrdem();
         var ciclo = new Ciclo(OffsetDateTime.now(ZoneOffset.UTC), null, ordem);
         var avaliacoes = new Avaliacoes(null, null);
-        var peca = montar(slug, artesao, contaId, valido, fotos, ciclo, BigDecimal.ZERO, avaliacoes);
+        var peca = montar(slug, artesao, contaId, valido, fotos, ciclo, avaliacoes);
         return pecas.salvar(peca, fotos);
     }
 
@@ -66,7 +70,7 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
         if (atual.inativadoEm() != null || pecas.possuiReservaAtiva(slug))
             throw new ErroPecaException(409, "PECA_INDISPONIVEL", null, "Peça indisponível para edição.");
         if (alteracoes == null)
-            alteracoes = new DadosPeca(null, null, null, null, null, null, null, null, null, null, null, null, null);
+            alteracoes = new DadosPeca(null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         if (alteracoes.inativadoEm() != null)
             throw ErroPecaException.invalido("inativadoEm", "Campo protegido.");
         var dados = validar(new DadosPeca(
@@ -78,6 +82,7 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
                 escolher(alteracoes.historia(), atual.historia()),
                 escolher(alteracoes.materiais(), atual.materiais()),
                 escolher(alteracoes.preco(), atual.preco()),
+                escolher(alteracoes.desconto(), atual.desconto()),
                 escolher(alteracoes.disponibilidade(), atual.disponibilidade()),
                 alteracoes.prazoProducaoDias() != null ? alteracoes.prazoProducaoDias()
                         : alteracoes.disponibilidade() != null && !alteracoes.disponibilidade().equals("encomenda")
@@ -90,7 +95,7 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
         var avaliacoes = new Avaliacoes(atual.avaliacao(), atual.totalAvaliacoes());
         var peca = montar(slug, atual.artesao(), contaId, dados,
                 fotos == null ? atual.fotos().stream().map(f -> new GerenciarPecasPort.FotoGravacao(f, null, null)).toList() : fotos,
-                ciclo, atual.desconto(), avaliacoes);
+                ciclo, avaliacoes);
         return pecas.salvar(peca, fotos);
     }
 
@@ -138,12 +143,11 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
     private record Ciclo(OffsetDateTime criadaEm, OffsetDateTime inativadoEm, int ordem) {}
 
     private Peca montar(String slug, String artesao, UUID dono, DadosPeca dados,
-            List<GerenciarPecasPort.FotoGravacao> fotos, Ciclo ciclo,
-            BigDecimal desconto, Avaliacoes avaliacoes) {
+            List<GerenciarPecasPort.FotoGravacao> fotos, Ciclo ciclo, Avaliacoes avaliacoes) {
         var metadados = fotos.stream().map(GerenciarPecasPort.FotoGravacao::foto).toList();
         String imagem = metadados.isEmpty() ? "/fotos/ImagemBase.webp" : metadados.getFirst().url();
         return new Peca(slug, dados.nome(), artesao, dados.territorio(), dados.tecnica(), dados.categoria(),
-                dados.tipo(), dados.preco(), desconto, dados.disponibilidade(),
+                dados.tipo(), dados.preco(), dados.desconto(), dados.disponibilidade(),
                 dados.prazoProducaoDias() == null ? null : dados.prazoProducaoDias().intValueExact(),
                 dados.historia(), imagem, avaliacoes.media(), avaliacoes.total(), dados.situacao(),
                 ciclo.inativadoEm(), ciclo.ordem(), dono, ciclo.criadaEm(), metadados,
@@ -181,6 +185,7 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
                 || preco.stripTrailingZeros().scale() > 2
                 || (situacao.equals("publicada") && preco.signum() == 0))
             throw ErroPecaException.invalido("preco", "Preço inválido para a situação da peça.");
+        BigDecimal desconto = validarDesconto(entrada.desconto(), preco, situacao);
         String disponibilidade = entrada.disponibilidade() == null ? "disponivel" : entrada.disponibilidade();
         if (!Set.of("disponivel", "unica", "encomenda").contains(disponibilidade))
             throw ErroPecaException.invalido("disponibilidade", "Disponibilidade inválida.");
@@ -190,7 +195,20 @@ public class PecaEscritaService implements CriarPecaUseCase, AtualizarPecaUseCas
                 || (situacao.equals("publicada") && disponibilidade.equals("encomenda") && prazo == null))
             throw ErroPecaException.invalido("prazoProducaoDias", "Informe prazoProducaoDias entre 1 e 120 dias.");
         return new DadosPeca(nome, entrada.tecnica(), entrada.territorio(), entrada.categoria(), entrada.tipo(),
-                historia, materiais, preco, disponibilidade, prazo, situacao, entrada.fotos(), null);
+                historia, materiais, preco, desconto, disponibilidade, prazo, situacao, entrada.fotos(), null);
+    }
+
+    private BigDecimal validarDesconto(BigDecimal recebido, BigDecimal preco, String situacao) {
+        BigDecimal desconto = recebido == null ? BigDecimal.ZERO : recebido;
+        if (desconto.signum() < 0 || desconto.compareTo(DESCONTO_MAXIMO) > 0 || desconto.stripTrailingZeros().scale() > 2)
+            throw ErroPecaException.invalido("desconto", "Informe um desconto entre 0 e 90%, com até 2 casas decimais.");
+        if (situacao.equals("publicada") && precoComDesconto(preco, desconto).compareTo(MENOR_PRECO_PUBLICADO) < 0)
+            throw ErroPecaException.invalido("desconto", "O preço com desconto precisa ser de pelo menos R$ 0,01.");
+        return desconto;
+    }
+
+    private BigDecimal precoComDesconto(BigDecimal preco, BigDecimal desconto) {
+        return preco.multiply(CEM.subtract(desconto)).divide(CEM, 2, RoundingMode.HALF_UP);
     }
 
     private void referencia(String valor, List<String> valores, String campo) {
