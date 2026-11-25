@@ -1,12 +1,13 @@
 package br.com.balaio.catalog.peca.persistence;
 
 import java.math.BigDecimal;
-import java.text.Normalizer;
-import java.util.Locale;
+import java.util.ArrayList;
 
 import org.springframework.data.jpa.domain.Specification;
 
 import br.com.balaio.catalog.peca.application.FiltroCatalogo;
+import br.com.balaio.catalog.peca.application.TermoBusca;
+import jakarta.persistence.criteria.Predicate;
 
 final class PecaSpecifications {
     private PecaSpecifications() {
@@ -17,13 +18,8 @@ final class PecaSpecifications {
                 criteria.equal(root.get("situacao"), "publicada"),
                 criteria.isNull(root.get("inativadoEm")));
 
-        if (filtro.q() != null && !filtro.q().isBlank()) {
-            String termo = normalizarTexto(filtro.q().trim())
-                    .replace("\\", "\\\\")
-                    .replace("%", "\\%")
-                    .replace("_", "\\_");
-            spec = spec.and((root, query, criteria) -> criteria.like(
-                    criteria.lower(root.get("textoBusca")), "%" + termo + "%", '\\'));
+        for (TermoBusca termo : filtro.termosDaBusca()) {
+            spec = spec.and(casaComTermo(termo));
         }
 
         spec = igualSeInformado(spec, "tecnica", filtro.tecnica());
@@ -57,9 +53,21 @@ final class PecaSpecifications {
         return atual.and((root, query, criteria) -> criteria.equal(root.get(campo), valor));
     }
 
-    private static String normalizarTexto(String texto) {
-        return Normalizer.normalize(texto, Normalizer.Form.NFD)
-                .replaceAll("\\p{M}+", "")
-                .toLowerCase(Locale.ROOT);
+    private static Specification<PecaJpaEntity> casaComTermo(TermoBusca termo) {
+        return (root, query, criteria) -> {
+            var textoBusca = criteria.lower(root.get("textoBusca"));
+            var alternativas = new ArrayList<Predicate>();
+            for (String variante : termo.variantes()) {
+                alternativas.add(criteria.like(textoBusca, "%" + escaparCuringas(variante) + "%", '\\'));
+            }
+            if (!termo.artesaos().isEmpty()) {
+                alternativas.add(root.get("artesao").in(termo.artesaos()));
+            }
+            return criteria.or(alternativas.toArray(Predicate[]::new));
+        };
+    }
+
+    private static String escaparCuringas(String texto) {
+        return texto.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 }

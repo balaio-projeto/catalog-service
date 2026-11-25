@@ -42,6 +42,7 @@ public abstract class CatalogJwtTestSupport {
         registry.add("balaio.catalog.jwt.public-key-location", () -> PUBLICA.toUri().toString());
         registry.add("balaio.catalog.jwt.issuer", () -> "balaio-test");
         registry.add("balaio.catalog.jwt.audience", () -> "balaio-test-audience");
+        registry.add("balaio.catalog.profile-url", () -> "http://127.0.0.1:9");
     }
 
     protected String token(UUID id, String papel) {
