@@ -847,6 +847,120 @@ class PecasControllerIntegrationTest extends CatalogJwtTestSupport {
                 .getStatusCode().value()).isEqualTo(409);
     }
 
+    /** TC05 (TS02): comprador e outro artesão não leem o painel de peças do artesão. */
+    @Test
+    void compradorEOutroArtesaoNaoLeemPainelDePecas() {
+        UUID dono = UUID.randomUUID();
+        UUID outro = UUID.randomUUID();
+        String slugArtesao = "artesao-" + dono;
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(slugArtesao);
+        String slugPeca = criarPeca(dono, "publicada", Map.of("nome", "Vaso do dono"));
+        String painel = "/api/v1/artesaos/" + slugArtesao + "/pecas/painel";
+
+        assertThat(requisitar(HttpMethod.GET, painel, token(UUID.randomUUID(), "comprador"), null, Map.class)
+                .getStatusCode().value()).isEqualTo(403);
+        var deOutroArtesao = requisitar(HttpMethod.GET, painel, token(outro, "artesao"), null, Map.class);
+        assertThat(deOutroArtesao.getStatusCode().value()).isIn(403, 404);
+        assertThat(String.valueOf(deOutroArtesao.getBody())).doesNotContain(slugPeca);
+        assertThat(requisitar(HttpMethod.GET, painel, null, null, Map.class).getStatusCode().value()).isEqualTo(401);
+    }
+
+    /** TC22 (TS04): visitante vê só a peça publicada; o dono vê rascunho e publicada. */
+    @Test
+    void visitanteVeSoPublicadaEDonoVeRascunhoEPublicada() {
+        UUID dono = UUID.randomUUID();
+        String slugArtesao = "artesao-" + dono;
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(slugArtesao);
+        String publicada = criarPeca(dono, "publicada", Map.of("nome", "Vaso publicado"));
+        String rascunho = criarPeca(dono, "rascunho", Map.of("nome", "Vaso rascunho"));
+
+        String lista = "/api/v1/artesaos/" + slugArtesao + "/pecas";
+        String visitante = http.getForEntity(lista, String.class).getBody();
+        assertThat(visitante).contains(publicada).doesNotContain(rascunho);
+
+        String donoVe = requisitar(HttpMethod.GET, lista + "/painel", token(dono, "artesao"), null, Map.class)
+                .getBody().toString();
+        assertThat(donoVe).contains(publicada, rascunho);
+    }
+
+    /** TC37 (TS22): técnica, materiais e história são gravados e aparecem na página da peça. */
+    @Test
+    void tecnicaMateriaisEHistoriaSaoGravadosEExibidosNaPeca() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        var payload = new java.util.HashMap<String, Object>(dados("publicada", 100));
+        payload.put("nome", "Peça com história");
+        payload.put("tecnica", "Cerâmica & Barro");
+        payload.put("historia", List.of("Primeiro parágrafo da história.", "Segundo parágrafo."));
+        payload.put("materiais", List.of("Linha de algodão"));
+        var criada = requisitar(HttpMethod.POST, "/api/v1/pecas", token(dono, "artesao"), payload, Map.class);
+        assertThat(criada.getStatusCode().value()).as(String.valueOf(criada.getBody())).isEqualTo(201);
+        String slug = (String) ((Map<?, ?>) criada.getBody().get("dados")).get("slug");
+
+        Map<String, Object> detalhe = (Map<String, Object>) http.getForEntity("/api/v1/pecas/" + slug, Map.class).getBody().get("dados");
+        assertThat(detalhe).containsEntry("tecnica", "Cerâmica & Barro")
+                .containsEntry("materiais", List.of("Linha de algodão"))
+                .containsEntry("historia", List.of("Primeiro parágrafo da história.", "Segundo parágrafo."));
+    }
+
+    /** TC39 (TS23): edição de preço aparece no detalhe e na vitrine; preço inválido não altera a peça. */
+    @Test
+    void edicaoDePrecoAparecenoDetalheEnaVitrine() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        String slug = criarPeca(dono, "publicada", Map.of("nome", "Peça de preço"));
+
+        var editada = requisitar(HttpMethod.PATCH, "/api/v1/pecas/" + slug, jwt, Map.of("preco", 150), Map.class);
+        assertThat(editada.getStatusCode().value()).isEqualTo(200);
+        assertThat(precoDe("/api/v1/pecas/" + slug, slug)).isEqualByComparingTo("150");
+        assertThat(precoNaVitrine(slug)).isEqualByComparingTo("150");
+
+        var invalida = requisitar(HttpMethod.PATCH, "/api/v1/pecas/" + slug, jwt, Map.of("preco", 0), Map.class);
+        assertThat(invalida.getStatusCode().value()).isEqualTo(400);
+        assertThat(precoDe("/api/v1/pecas/" + slug, slug)).isEqualByComparingTo("150");
+    }
+
+    /** TC44 (TS25): peça inativada não é mais acessível pela URL pública. */
+    @Test
+    void pecaInativaNaoEhPublicaPelaUrl() {
+        UUID dono = UUID.randomUUID();
+        when(artesaos.resolver(org.mockito.ArgumentMatchers.eq(dono), org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("artesao-" + dono);
+        String jwt = token(dono, "artesao");
+        String slug = criarPeca(dono, "publicada", Map.of("nome", "Peça inativada"));
+        assertThat(http.getForEntity("/api/v1/pecas/" + slug, Map.class).getStatusCode().value()).isEqualTo(200);
+
+        assertThat(requisitar(HttpMethod.DELETE, "/api/v1/pecas/" + slug, jwt, null, Map.class)
+                .getStatusCode().value()).isEqualTo(204);
+        assertThat(http.getForEntity("/api/v1/pecas/" + slug, Map.class).getStatusCode().value()).isEqualTo(404);
+        assertThat(requisitar(HttpMethod.GET, "/api/v1/pecas/" + slug, token(UUID.randomUUID(), "artesao"), null, Map.class)
+                .getStatusCode().value()).isEqualTo(404);
+    }
+
+    private String criarPeca(UUID dono, String situacao, Map<String, Object> ajustes) {
+        var payload = new java.util.HashMap<String, Object>(dados(situacao, 100));
+        payload.putAll(ajustes);
+        var criada = requisitar(HttpMethod.POST, "/api/v1/pecas", token(dono, "artesao"), payload, Map.class);
+        assertThat(criada.getStatusCode().value()).isEqualTo(201);
+        return (String) ((Map<?, ?>) criada.getBody().get("dados")).get("slug");
+    }
+
+    private java.math.BigDecimal precoDe(String caminho, String slug) {
+        var dados = (Map<?, ?>) http.getForEntity(caminho, Map.class).getBody().get("dados");
+        return new java.math.BigDecimal(String.valueOf(dados.get("preco")));
+    }
+
+    private java.math.BigDecimal precoNaVitrine(String slug) {
+        var lista = (List<?>) http.getForEntity("/api/v1/pecas", Map.class).getBody().get("dados");
+        var peca = lista.stream().map(Map.class::cast).filter(p -> slug.equals(p.get("slug"))).findFirst().orElseThrow();
+        return new java.math.BigDecimal(String.valueOf(peca.get("preco")));
+    }
+
     private List<ResponseEntity<Map>> criarAoMesmoTempo(String jwt, String nomeA, String nomeB) throws Exception {
         var inicio = new CountDownLatch(1);
         try (var executor = Executors.newFixedThreadPool(2)) {

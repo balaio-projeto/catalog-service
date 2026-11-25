@@ -3,6 +3,7 @@ package br.com.balaio.catalog.peca.application;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import br.com.balaio.catalog.peca.application.port.in.ListarPecasUseCase;
+import br.com.balaio.catalog.peca.application.port.out.ConsultarArtesaosPort;
 import br.com.balaio.catalog.peca.application.port.out.ConsultarPecasPort;
 
 @Service
@@ -11,15 +12,18 @@ public class ListarPecasService implements ListarPecasUseCase {
     private static final int TAMANHO_MAXIMO_PAGINA = 100;
 
     private final ConsultarPecasPort consultarPecas;
+    private final ConsultarArtesaosPort consultarArtesaos;
 
-    public ListarPecasService(ConsultarPecasPort consultarPecas) {
+    public ListarPecasService(ConsultarPecasPort consultarPecas, ConsultarArtesaosPort consultarArtesaos) {
         this.consultarPecas = consultarPecas;
+        this.consultarArtesaos = consultarArtesaos;
     }
 
     @Override
-    public PaginaPecas listar(FiltroCatalogo filtro, Integer paginaSolicitada, Integer tamanhoSolicitado,
+    public PaginaPecas listar(FiltroCatalogo filtroSolicitado, Integer paginaSolicitada, Integer tamanhoSolicitado,
             OrdenacaoCatalogo ordenacao) {
-        validarFaixaDePreco(filtro);
+        validarFaixaDePreco(filtroSolicitado);
+        var filtro = comArtesaosDaBusca(filtroSolicitado);
         long total = consultarPecas.contar(filtro);
         int tamanho = resolverTamanho(tamanhoSolicitado, total);
         int totalPaginas = Math.max(1, (int) ((total + tamanho - 1) / tamanho));
@@ -27,6 +31,13 @@ public class ListarPecasService implements ListarPecasUseCase {
 
         var pecas = consultarPecas.buscar(filtro, pagina - 1, tamanho, ordenacao);
         return new PaginaPecas(pecas, pagina, tamanho, total, totalPaginas);
+    }
+
+    private FiltroCatalogo comArtesaosDaBusca(FiltroCatalogo filtro) {
+        if (filtro.q() == null || filtro.q().isBlank()) {
+            return filtro;
+        }
+        return filtro.comTermos(TextoBusca.termos(filtro.q(), consultarArtesaos.listar()));
     }
 
     private void validarFaixaDePreco(FiltroCatalogo filtro) {
